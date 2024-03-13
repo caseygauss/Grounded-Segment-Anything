@@ -30,7 +30,7 @@ sam_predictor = SamPredictor(light_hqsam)
 
 # Predict classes and hyper-param for GroundingDINO
 SOURCE_IMAGE_PATH = "./EfficientSAM/LightHQSAM/example_light_hqsam.png"
-CLASSES = ["Bench"]
+CLASSES = ["bench"]
 BOX_THRESHOLD = 0.25
 TEXT_THRESHOLD = 0.25
 NMS_THRESHOLD = 0.8
