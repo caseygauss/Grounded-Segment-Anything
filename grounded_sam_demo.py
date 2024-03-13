@@ -230,6 +230,7 @@ if __name__ == "__main__":
     plt.savefig(
         os.path.join(output_dir, "grounded_sam_output.jpg"),
         bbox_inches="tight", dpi=300, pad_inches=0.0
+
     )
 
     save_mask_data(output_dir, masks, boxes_filt, pred_phrases)
