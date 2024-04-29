@@ -254,10 +254,14 @@ def show_mask(mask, ax, random_color=False):
     ax.imshow(mask_image)
 
 
-def show_box(box, ax, label):
+def show_box(box, ax, label, count):
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))
+
+    colors = ["green", "blue", "red", "yellow", "brown", "pink", "orange", "grey", "purple"]
+    color_to_use = colors[count-1]
+
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor=color_to_use, facecolor=(0,0,0,0), lw=2))
     ax.text(x0, y0, label)
 
 
@@ -607,6 +611,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         multimask_output = False,
     )
 
+    box_count = 1
+
     # draw output image
     plt.figure(figsize=(10, 10))
     plt.imshow(image)
@@ -614,9 +620,11 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         show_mask(mask.cpu().numpy(), plt.gca(), random_color=True)
     for box, label in zip(boxes_filt, pred_phrases):
         print("count me")
-        show_box(box.numpy(), plt.gca(), label)
+        show_box(box.numpy(), plt.gca(), label, box_count)
+        box_count += 1
 
-    plt.axis('off')
+    plt.axis('on')
+    print("Trying to save with output_dir: " + output_dir)
     plt.savefig(
         os.path.join(output_dir, "grounded_sam_output.jpg"),
         bbox_inches="tight", dpi=300, pad_inches=0.0

@@ -254,10 +254,14 @@ def show_mask(mask, ax, random_color=False):
     ax.imshow(mask_image)
 
 
-def show_box(box, ax, label):
+def show_box(box, ax, label, count):
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))
+
+    colors = ["green", "blue", "red", "yellow", "brown", "pink", "orange", "grey", "purple"]
+    color_to_use = colors[count-1]
+
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor=color_to_use, facecolor=(0,0,0,0), lw=2))
     ax.text(x0, y0, label)
 
 
@@ -272,7 +276,7 @@ def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, sa
     #assert mask_np.shape[1] in [1448, 1792], f"Mask width is {mask_np.shape[1]}, expected 1454 or 1792"
 
     # Create an RGBA image with the same dimensions as the mask
-    mask_img = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
+    mask_img = np.zeros((mask_np.shape[0], mask_np.shape[1], 2), dtype=np.uint8)
 
     # Set the mask color and alpha
     mask_color = np.array([225, 225, 225, 255], dtype=np.uint8)  # White color mask with full opacity
@@ -523,7 +527,7 @@ def filter_and_limit_boxes(box_label_pairs, face_box, image_width, max_count):
     :return: Filtered and limited list of box-label pairs.
     """
     # Define the proximity threshold as 10% of the image's width
-    proximity_threshold = 0.05 * image_width
+    proximity_threshold = 0.025 * image_width
 
     # Filter pairs based on distance to the face_box
     filtered_pairs = [
@@ -598,152 +602,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         boxes_filt[i][2:] += boxes_filt[i][:2]
 
     boxes_filt = boxes_filt.cpu()
-
-    for box, label in zip(boxes_filt, pred_phrases):
-        score = float(label.split('(')[-1].strip(')'))  # Extract the score
-        info_obj = {'box': box, 'label': label, 'score': score}
-        if 'face' in label:
-            face_boxes.append(info_obj)
-            face_scores.append(score)
-            print(f"Face box: {box}, score: {score}")
-        elif 'eye' in label:
-            eye_boxes.append(info_obj)
-        elif 'mouth' in label:
-            mouth_boxes.append(info_obj)
-        elif 'ear' in label:
-            ear_boxes.append(info_obj)
-        elif 'hair' in label:
-            hair_boxes.append(info_obj)
-        elif 'main character' in label:
-            main_character_boxes.append(info_obj)
-            score = float(label.split('(')[-1].strip(')'))  # Extracting the confidence score from the label
-            main_character_scores.append(score)
-        else:
-            other_boxes.append(info_obj)
-
-    if not face_boxes and not main_character_boxes:
-        if hair_boxes:
-            #Calculate the middle of the image
-            image_middle = (W / 2, H / 2)
-
-            #Find the hairbox closest to the middle of the image
-            closest_hair_box = None
-            closest_distance = float('inf')
-
-            # Iterate over hair box pairs instead of just boxes
-            for pair in hair_boxes:
-                box = pair['box']  # Extract the box from the pair
-                box_middle = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-                distance = np.sqrt((box_middle[0] - image_middle[0]) ** 2 + (box_middle[1] - image_middle[1]) ** 2)
-                
-                if distance < closest_distance:
-                    closest_distance = distance
-                    closest_hair_pair = pair  # Update to store the closest pair, not just the box
-
-
-            #Filter boxes near the closest hair box
-            if closest_hair_pair is not None and closest_distance < 250:
-                the_hair_box = [closest_hair_pair['box']]
-                focal_box = [closest_hair_pair['box']]
-                focal_box_label = closest_hair_pair['label']  # Optionally keep track of the label
-            else:
-                #No Hair box, so we're going to skip the rest of the code
-                print("No hair box found in the zone")
-                return "None"
-        else:
-            #No hair box, so we're going to skip the rest of the code
-            print("No hair box found")
-            return "None"
-        
-    focal_box = None
-    focal_box_label = None
-    # Select the highest confidence face box
-    if face_boxes:
-        detection_status = "face_found"
-        #highest_confidence_face_box = select_highest_confidence_face_box(face_boxes, face_scores)
-        """
-        chosen_pair = select_centermost_face_box(face_boxes, (W, H))
-        if chosen_pair is not None:
-            chosen_face_box = chosen_pair['box']
-            focal_box = [chosen_face_box]
-            focal_box_label = chosen_pair['label']
-            print("Chosen face box:", chosen_face_box)
-        else:
-            print("Going with the highest confidence face box")
-            chosen_pair = select_highest_confidence_face_box(face_boxes)
-            chosen_face_box = chosen_pair['box']
-            focal_box = [chosen_face_box]
-            focal_box_label = chosen_pair['label']
-        """
-        chosen_pair = face_confidence_score(face_boxes, (W, H), center_weight=0.65, confidence_weight=0.35)
-        if chosen_pair is not None:
-            chosen_face_box = chosen_pair['box']
-            focal_box = [chosen_face_box]
-            focal_box_label = chosen_pair['label']
-            print("Chosen face box based on combined score:", chosen_face_box)
-        else:
-            print("No suitable face box found")
-           
-
-        # Debugging: Print the selected face box
-        #print("Selected face box:", chosen_face_box)
-        # Debugging: Print the number of filtered boxes
-        #print("Number of boxes close to the face box:", len(close_boxes))
-    elif main_character_boxes:
-        detection_status = "character_found"
-        # Convert the list of scores to a numpy array for easier manipulation
-        # Assuming main_character_boxes is a list of dictionaries each with 'box', 'label', and 'score'
-        highest_score_pair = max(main_character_boxes, key=lambda pair: pair['score'])
-        chosen_face_box = highest_score_pair['box']
-        focal_box = [chosen_face_box]  # Ensure focal_box is a list containing the chosen box
-        focal_box_label = highest_score_pair['label']
-    elif the_hair_box:
-        detection_status = "hair_found"
-    else:
-        detection_status = "None"
-        return detection_status
-        close_boxes = []
-
-    all_selected_pairs = []
-    close_boxes = []
-    if focal_box is not None and not main_character_boxes:
-        # Filter boxes near the selected face box with an increased threshold
-        #close_boxes = filter_boxes_near_face_box(boxes_filt, highest_confidence_face_box, 200)
-        # Assuming each *_boxes variable is now a list of dictionaries with 'box' and 'label' (and optionally 'score')
-        selected_eye_pairs = filter_and_limit_boxes(eye_boxes, chosen_face_box, W, 2)
-        selected_mouth_pairs = filter_and_limit_boxes(mouth_boxes, chosen_face_box, W, 1)
-        selected_ear_pairs = filter_and_limit_boxes(ear_boxes, chosen_face_box, W, 2)
-        selected_hair_pairs = filter_and_limit_boxes(hair_boxes, chosen_face_box, W, 1)
-
-        all_selected_pairs = selected_eye_pairs + selected_mouth_pairs + selected_ear_pairs + selected_hair_pairs
-
-
-        # Extract just the boxes for measuring unevenness or further processing
-        selected_eye_boxes = [pair['box'] for pair in selected_eye_pairs]
-
-        # Continue with your logic
-        if len(selected_eye_boxes) >= 2:
-            eye_unevenness = measure_eye_unevenness(selected_eye_boxes)
-
-        selected_mouth_boxes = [pair['box'] for pair in selected_mouth_pairs]
-        selected_ear_boxes = [pair['box'] for pair in selected_ear_pairs]
-        selected_hair_boxes = [pair['box'] for pair in selected_hair_pairs]
-
-        close_boxes = [pair['box'] for pair in selected_eye_pairs + selected_mouth_pairs + selected_ear_pairs + selected_hair_pairs]
-        #close_boxes.append(focal_box)
-
-        
-    if focal_box is not None:
-        close_boxes += focal_box
-        #focal_box_label = focal_box_label  # Example label, adjust based on your logic
-        focal_box_pair = {'box': focal_box[0], 'label': focal_box_label}  # Ensure focal_box is in the expected format
-        all_selected_pairs.append(focal_box_pair)
-    
-    boxes_filt = torch.stack(close_boxes)
-
-    #print("Later boxes_filt:", boxes_filt)
     transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(device)
-    
+
     masks, _, _ = predictor.predict_torch(
         point_coords = None,
         point_labels = None,
@@ -751,69 +611,33 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         multimask_output = False,
     )
 
-    # Dilate each mask to add padding
-    
-    dilation_amt = 25  # Adjust this as needed
-    
-    padded_masks = []
-    for mask in masks:
-        mask_np = mask.cpu().numpy()[0]  # Convert the mask to a numpy array
+    # Iterate over each box and corresponding mask
+    for i, (box, mask) in enumerate(zip(boxes_filt, masks)):
+        # Create a new figure for each box/mask combination
+        fig, ax = plt.subplots(figsize=(10, 10))
 
-        if 'Main Character' not in text_prompt:
-            print("yoooooo")
-            dilated_mask, _ = dilate_mask(mask_np, dilation_amt)
-            padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
-        else:
-            if "emotion" not in image_path:
-                dilated_mask, _ = dilate_mask(mask_np, 5)
-                padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
-            else:
-                # Do not dilate the mask but add it to padded_masks
-                padded_masks.append(torch.from_numpy(np.array(mask_np)).unsqueeze(0))
-                #dilated_mask, _ = dilate_mask(mask_np, -10)
-                #padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
+        # Display the original image
+        ax.imshow(image)
 
-    binary_padded_masks = []
-    for mask in padded_masks:
-        binary_mask = mask > 0.5  # Thresholding
-        binary_padded_masks.append(binary_mask)
+        # Overlay the specific mask
+        show_mask(mask.cpu().numpy(), ax, random_color=True)
 
-    #combined_masks_tensor = torch.stack(binary_padded_masks)
+        # Draw the box and label it
+        label = pred_phrases[i]  # Assuming pred_phrases has the same order as boxes_filt
+        show_box(box.numpy(), ax, label, i+1)
 
-    filled_combined_mask = combine_and_fill_gaps(padded_masks)
-    #print("Filled combined mask:", filled_combined_mask)
+        # Remove axis
+        ax.axis('off')
 
-    # draw output image
-    plt.figure(figsize=(10, 10))
-    if image.dtype == np.uint8:
-        image = image.astype(np.float32) / 255.0
+        # Save the figure
+        file_name = f"grounded_sam_output_{i+1}.jpg"
+        fig.savefig(
+            os.path.join(output_dir, file_name),
+            bbox_inches="tight", dpi=300, pad_inches=0.0
+        )
+        plt.close(fig)  # Close the figure to free up memory
 
-    plt.imshow(image)
-
-    for mask in padded_masks:
-        mask_np = mask.cpu().numpy()[0]
-        mask_np = mask_np.astype(np.float32)
-        if mask_np.max() > 1:
-            mask_np /= 255.0
-
-        show_mask(mask_np, plt.gca(), random_color=True)
-
-    """
-    for box, label in zip(boxes_filt, pred_phrases):
-        show_box(box.numpy(), plt.gca(), label)
-    """
-    for pair in all_selected_pairs:
-        box = pair['box'].numpy()  # Ensure the box is converted to numpy array if it's a tensor
-        label = pair['label']  # Use the label directly from the pair
-        show_box(box, plt.gca(), label)
-
-    plt.axis('off')
-    plt.savefig(
-        os.path.join(output_dir, f"cropped_{save_path}.jpg"),
-        bbox_inches="tight", dpi=300, pad_inches=0.0
-    )
-
-    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path)
+    save_mask_data(output_dir, masks, boxes_filt, pred_phrases, image_path, save_path)
 
     return detection_status
 

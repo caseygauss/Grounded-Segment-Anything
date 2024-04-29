@@ -64,10 +64,10 @@ def measure_eye_unevenness(selected_eye_boxes):
     combined_unevenness_score = vertical_offset + width_difference + height_difference
 
     # Print the calculated values for troubleshooting
-    print(f"Vertical Offset: {vertical_offset}")
-    print(f"Width Difference: {width_difference}")
-    print(f"Height Difference: {height_difference}")
-    print(f"Combined Unevenness Score: {combined_unevenness_score}")
+    #print(f"Vertical Offset: {vertical_offset}")
+    #print(f"Width Difference: {width_difference}")
+    #print(f"Height Difference: {height_difference}")
+    #print(f"Combined Unevenness Score: {combined_unevenness_score}")
     
     return {
         "vertical_offset": vertical_offset,
@@ -261,7 +261,7 @@ def show_box(box, ax, label):
     ax.text(x0, y0, label)
 
 
-def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path):
+def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False):
     value = 0  # 0 for background
     background_alpha = 0.01
 
@@ -272,36 +272,35 @@ def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, sa
     #assert mask_np.shape[1] in [1448, 1792], f"Mask width is {mask_np.shape[1]}, expected 1454 or 1792"
 
     # Create an RGBA image with the same dimensions as the mask
-    mask_img = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
+    #mask_img = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
 
     # Set the mask color and alpha
     mask_color = np.array([225, 225, 225, 255], dtype=np.uint8)  # White color mask with full opacity
+    mask_img_np = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
+    # Apply the mask color and alpha to where mask_np indicates (assuming mask_np is a binary mask)
+    mask_img_np[mask_np > 0] = mask_color  # Update this condition based on how mask_np indicates the mask
+
+    
+    # Convert the numpy array to a PIL Image
+    mask_img = Image.fromarray(mask_img_np, 'RGBA')
+    
+    # Create a new, transparent background image
+    background_img = Image.new('RGBA', original_size, (0, 0, 0, 0))
+    
+    # Place the mask on the background at specified coordinates
+    background_img.paste(mask_img, (int(crop_x), int(crop_y)), mask_img)
+
 
     # Apply the mask color where mask_np is True
-    mask_img[mask_np] = mask_color
+    #mask_img[mask_np] = mask_color
 
-    # Save the mask image
-    path_name = "mask"+save_path+".png"
-    mask_image_path = os.path.join(output_dir, path_name)
-    Image.fromarray(mask_img).save(mask_image_path, format='PNG')
+    if not just_measuring:
+        # Save the mask image
+        path_name = "mask"+save_path+".png"
+        mask_image_path = os.path.join(output_dir, path_name)
+        background_img.save(mask_image_path, format='PNG')
 
-    json_data = [{
-        'value': value,
-        'label': 'background'
-    }]
-    for label, box in zip(label_list, box_list):
-        value += 1
-        name, logit = label.split('(')
-        logit = logit[:-1] # the last is ')'
-        json_data.append({
-            'value': value,
-            'label': name,
-            'logit': float(logit),
-            'box': box.numpy().tolist(),
-        })
     
-    with open(os.path.join(output_dir, 'mask.json'), 'w') as f:
-        json.dump(json_data, f)
 
 def is_close(box1, box2, image_width, relative_threshold=0.2):
     """
@@ -523,7 +522,7 @@ def filter_and_limit_boxes(box_label_pairs, face_box, image_width, max_count):
     :return: Filtered and limited list of box-label pairs.
     """
     # Define the proximity threshold as 10% of the image's width
-    proximity_threshold = 0.05 * image_width
+    proximity_threshold = 0.025 * image_width
 
     # Filter pairs based on distance to the face_box
     filtered_pairs = [
@@ -545,22 +544,76 @@ def filter_and_limit_boxes(box_label_pairs, face_box, image_width, max_count):
     
     return limited_pairs
 
-def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, save_path=""):
+def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[]):
     detection_status = "None"
 
     # make dir
     os.makedirs(output_dir, exist_ok=True)
     # load image
-    image_pil, image = load_image(image_path)
+    original_image_pil, original_image = load_image(image_path)
+    original_size = original_image_pil.size
     # load model
     model = load_model(config_file, grounded_checkpoint, device=device)
 
     # visualize raw image
-    image_pil.save(os.path.join(output_dir, "raw_image.jpg"))
+    original_image_pil.save(os.path.join(output_dir, "raw_image.jpg"))
+
+    cropped_image = original_image
+
+    crop_x = 0
+    crop_y = 0
+
+    char_save_path = save_path.split("_")[0]
+
+    if character_prompt != "":
+        box_to_use_num = None
+        char_boxes_filt, char_pred_phrases = get_grounding_output(
+            model, original_image, character_prompt, 0.2, 0.01, device=device
+        )
+
+        print("Character box count is", len(char_boxes_filt))
+
+        for box, label in zip(char_boxes_filt, char_pred_phrases):
+            score = float(label.split('(')[-1].strip(')'))  # Extract the score
+            info_obj = {'box': box, 'label': label, 'score': score}
+            #find the box with highest score
+            if character_box is None or score > character_box['score']:
+                character_box = info_obj
+
+
+        ##Crop the image to the character box
+        if character_box is not None:
+            size = original_image_pil.size
+            H, W = size[1], size[0]
+            c_box = character_box['box'] * torch.Tensor([W, H, W, H])
+            c_box[:2] -= c_box[2:] / 2
+            c_box[2:] += c_box[:2]
+            # Convert to (left, upper, right, lower)
+            c_box = c_box.cpu().numpy().tolist()
+            left, upper, right, lower = c_box[0], c_box[1], c_box[2], c_box[3]
+
+            crop_x = left
+            crop_y = upper
+
+            #print("Dimensions of transformed box:", c_box)
+            cropped_image = original_image_pil.crop((left, upper, right, lower))
+            cropped_image.save(os.path.join(output_dir, f"cropped_img_{char_save_path}.jpg"))
+            
+        else:
+            print("No character box found")
+            return "None"
+
+    cropped_image_path = os.path.join(output_dir, f"cropped_img_{char_save_path}.jpg")
+    #print("Cropped image path:", cropped_image_path)
+
+    cropped_pil, cropped_img = load_image(cropped_image_path)
+
+    if text_prompt == "":
+        return "Done"
 
     # run grounding dino model
     boxes_filt, pred_phrases = get_grounding_output(
-        model, image, text_prompt, box_threshold, text_threshold, device=device
+        model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
     )
 
     # Categorize boxes by label
@@ -586,11 +639,11 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         print("Using SAM-HQ")
     else:
         predictor = SamPredictor(sam_model_registry[sam_version](checkpoint=sam_checkpoint).to(device))
-    image = cv2.imread(image_path)
+    image = cv2.imread(cropped_image_path)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     predictor.set_image(image)
 
-    size = image_pil.size
+    size = cropped_pil.size
     H, W = size[1], size[0]
     for i in range(boxes_filt.size(0)):
         boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
@@ -605,7 +658,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         if 'face' in label:
             face_boxes.append(info_obj)
             face_scores.append(score)
-            print(f"Face box: {box}, score: {score}")
+            #print(f"Face box: {box}, score: {score}")
         elif 'eye' in label:
             eye_boxes.append(info_obj)
         elif 'mouth' in label:
@@ -620,9 +673,11 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             main_character_scores.append(score)
         else:
             other_boxes.append(info_obj)
-
+    the_hair_box = None
+    closest_hair_pair = None
     if not face_boxes and not main_character_boxes:
         if hair_boxes:
+
             #Calculate the middle of the image
             image_middle = (W / 2, H / 2)
 
@@ -642,21 +697,23 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
 
             #Filter boxes near the closest hair box
-            if closest_hair_pair is not None and closest_distance < 250:
+            if closest_hair_pair is not None and closest_distance < 1250:
                 the_hair_box = [closest_hair_pair['box']]
                 focal_box = [closest_hair_pair['box']]
                 focal_box_label = closest_hair_pair['label']  # Optionally keep track of the label
+                #print("Closest hair box:", closest_hair_pair['box'])
             else:
                 #No Hair box, so we're going to skip the rest of the code
                 print("No hair box found in the zone")
-                return "None"
+                #return "None"
         else:
             #No hair box, so we're going to skip the rest of the code
             print("No hair box found")
-            return "None"
+            #return "None"
         
     focal_box = None
     focal_box_label = None
+    
     # Select the highest confidence face box
     if face_boxes:
         detection_status = "face_found"
@@ -680,7 +737,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             chosen_face_box = chosen_pair['box']
             focal_box = [chosen_face_box]
             focal_box_label = chosen_pair['label']
-            print("Chosen face box based on combined score:", chosen_face_box)
+            #print("Chosen face box based on combined score:", chosen_face_box)
         else:
             print("No suitable face box found")
            
@@ -699,14 +756,17 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         focal_box_label = highest_score_pair['label']
     elif the_hair_box:
         detection_status = "hair_found"
+        print("hair was found")
     else:
         detection_status = "None"
+        ##If close_boxes is empty, then we're going to skip the rest of the code
         return detection_status
-        close_boxes = []
+        
 
     all_selected_pairs = []
     close_boxes = []
-    if focal_box is not None and not main_character_boxes:
+
+    if focal_box is not None and detection_status != 'hair_found' and not main_character_boxes:
         # Filter boxes near the selected face box with an increased threshold
         #close_boxes = filter_boxes_near_face_box(boxes_filt, highest_confidence_face_box, 200)
         # Assuming each *_boxes variable is now a list of dictionaries with 'box' and 'label' (and optionally 'score')
@@ -717,7 +777,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
         all_selected_pairs = selected_eye_pairs + selected_mouth_pairs + selected_ear_pairs + selected_hair_pairs
 
-
+        #print("Length of all selected pairs:", len(all_selected_pairs))
         # Extract just the boxes for measuring unevenness or further processing
         selected_eye_boxes = [pair['box'] for pair in selected_eye_pairs]
 
@@ -731,52 +791,179 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
         close_boxes = [pair['box'] for pair in selected_eye_pairs + selected_mouth_pairs + selected_ear_pairs + selected_hair_pairs]
         #close_boxes.append(focal_box)
-
+    elif the_hair_box:
+        #print('The closest hair box is:', the_hair_box)
+        #print('The closest hair pair is ', closest_hair_pair)
+        close_boxes = the_hair_box
+        all_selected_pairs = [closest_hair_pair]
         
-    if focal_box is not None:
+    if focal_box is not None and the_hair_box is None:
         close_boxes += focal_box
         #focal_box_label = focal_box_label  # Example label, adjust based on your logic
         focal_box_pair = {'box': focal_box[0], 'label': focal_box_label}  # Ensure focal_box is in the expected format
         all_selected_pairs.append(focal_box_pair)
-    
-    boxes_filt = torch.stack(close_boxes)
 
-    #print("Later boxes_filt:", boxes_filt)
-    transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(device)
-    
-    masks, _, _ = predictor.predict_torch(
-        point_coords = None,
-        point_labels = None,
-        boxes = transformed_boxes.to(device),
-        multimask_output = False,
-    )
 
+    box_areas = {}
+    for pair in all_selected_pairs:
+        box = pair['box']
+        label = pair['label']
+
+        # Calculate the area of the box
+        box_width = box[2] - box[0]
+        box_height = box[3] - box[1]
+        box_area = box_width * box_height
+
+        # Convert the tensor to a float and round to two decimal places
+        box_area = round(box_area.item(), 2)
+
+        box_areas[label] = box_area
+    print("Close boxes:", close_boxes)
+
+    masks_to_use = []
+    scores_to_use = []
+
+    if not negative_points:
+        boxes_filt = torch.stack(close_boxes)
+
+        #print("Later boxes_filt:", boxes_filt)
+        transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(device)
+
+        masks_list, scores_list, _ = predictor.predict_torch(
+            point_coords = None,
+            point_labels = None,
+            boxes = transformed_boxes.to(device),
+            multimask_output = True,
+        )
+        # Iterate over each set of masks and scores
+        for masks_set, scores_set in zip(masks_list, scores_list):
+            print(f"Number of masks in set: {len(masks_set)}")
+            print(f"Number of scores in set: {len(scores_set)}")
+            
+            # Plot all the masks in the set
+            for j, (mask, s) in enumerate(zip(masks_set, scores_set)):
+                #plt.figure(figsize=(10, 10))
+                #plt.imshow(image)
+                mask_np = mask.cpu().numpy()
+                mask_np = mask_np.astype(np.float32)
+                if mask_np.max() > 1:
+                    mask_np /= 255.0
+                #show_mask(mask_np, plt.gca())
+                #plt.title(f"Mask {j+1}, Score: {s.item():.3f}", fontsize=18)
+                #plt.axis('off')
+                #plt.show()
+            
+            # Find the index of the mask with the highest score in the set
+            highest_score_index = torch.argmax(scores_set).item()
+            selected_mask = masks_set[highest_score_index]
+            
+            print(f"Selected mask index in set: {highest_score_index}")
+            print(f"Selected mask shape in set: {selected_mask.shape}")
+            print(f"Selected mask score in set: {scores_set[highest_score_index].item():.3f}")
+            
+            # Add the selected mask to masks_to_use
+            masks_to_use.append(selected_mask)
+    else:
+    
+        negative_labels = []
+        for point in negative_points:
+            negative_labels.append(0)
+        negative_labels = np.array(negative_labels)
+        negative_points = np.array(negative_points)
+
+        # Convert boxes to a tensor with shape [1, M, 4]
+        boxes_tensor = torch.stack(close_boxes).unsqueeze(0).to(device)
+
+        # For points, you might need a unified way to handle varying numbers of points.
+        # One approach is padding, but here's a simplistic aggregation assuming all can be processed together:
+        # Flatten the list of lists into a single list of points, then convert to tensor with shape [1, N, 2]
+        # Assuming negative_points is a list of [x, y] points
+        points_tensor = torch.tensor(negative_points, dtype=torch.float32).unsqueeze(0).to(device)
+        expanded_points_tensor = points_tensor.repeat(len(close_boxes), 1, 1)
+
+        # Since negative_labels is already a flat numpy array of zeros
+        labels_tensor = torch.tensor(negative_labels, dtype=torch.long).unsqueeze(0).to(device)
+        expanded_labels_tensor = labels_tensor.repeat(len(close_boxes), 1)
+
+        print("Boxes tensor shape:", boxes_tensor.shape)
+        print("Points tensor shape:", expanded_points_tensor.shape)
+        print("Labels tensor shape:", labels_tensor.shape)
+
+        # Now, you can pass these to your model
+        masks_list, scores, logits = predictor.predict_torch(
+            point_coords=expanded_points_tensor,
+            point_labels=expanded_labels_tensor,
+            boxes=boxes_tensor,
+            multimask_output=True,
+        )
+        
+        masks = masks_list[0]  # Assuming there is only one set of masks
+        scores = scores[0]  # Assuming there is only one set of scores
+
+        print(f"Masks shape: {masks.shape}")
+        print(f"Scores shape: {scores.shape}")
+        print(f"Score values: {scores}")  # Print the score values for debugging
+
+        for j, (mask, s) in enumerate(zip(masks, scores)):
+            plt.figure(figsize=(10, 10))
+            plt.imshow(image)
+            mask_np = mask.cpu().numpy()
+            mask_np = mask_np.astype(np.float32)
+            if mask_np.max() > 1:
+                mask_np /= 255.0
+            show_mask(mask_np, plt.gca())
+            plt.title(f"Mask {j+1}, Score: {s.item():.3f}", fontsize=18)
+            plt.axis('off')
+            #plt.show()
+
+        selected_mask = None
+        # Check if the third mask's score is above 0.7
+        if len(masks) >= 3 and scores[2] > 0.7:
+            selected_mask = masks[2]
+            print("Selected the third mask with score: ", scores[2])
+        else:
+            selected_mask = masks[0]  # Fallback to the first mask
+            print("Fallback to the first mask")
+
+        print(f"Selected mask shape: {selected_mask.shape}")
+
+        masks_to_use = [selected_mask]
+        
     # Dilate each mask to add padding
-    
+    print(f"Number of selected masks: {len(masks_to_use)}")
     dilation_amt = 25  # Adjust this as needed
     
     padded_masks = []
-    for mask in masks:
-        mask_np = mask.cpu().numpy()[0]  # Convert the mask to a numpy array
 
-        if 'Main Character' not in text_prompt:
-            print("yoooooo")
+    if 'Main Character' not in text_prompt:
+        print("yoooooo")
+        for mask in masks_to_use:
+            mask_np = mask.cpu().numpy()  # Convert the mask to a numpy array
             dilated_mask, _ = dilate_mask(mask_np, dilation_amt)
             padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
-        else:
+    else:
+        for mask in masks_to_use:
+            mask_np = mask.cpu().numpy()  # Convert the mask to a numpy array
             if "emotion" not in image_path:
                 dilated_mask, _ = dilate_mask(mask_np, 5)
                 padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
             else:
                 # Do not dilate the mask but add it to padded_masks
                 padded_masks.append(torch.from_numpy(np.array(mask_np)).unsqueeze(0))
-                #dilated_mask, _ = dilate_mask(mask_np, -10)
-                #padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
 
+    area_dict = {}
     binary_padded_masks = []
-    for mask in padded_masks:
+    #for mask in padded_masks:
+    #    binary_mask = mask > 0.5  # Thresholding
+    #    binary_padded_masks.append(binary_mask)
+    for i, (mask, pair) in enumerate(zip(padded_masks, all_selected_pairs)):
         binary_mask = mask > 0.5  # Thresholding
         binary_padded_masks.append(binary_mask)
+
+        # Calculate the area of the current element
+        area = torch.sum(binary_mask).item()
+        label = pair['label']
+        area_dict[label] = area
 
     #combined_masks_tensor = torch.stack(binary_padded_masks)
 
@@ -796,6 +983,9 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         if mask_np.max() > 1:
             mask_np /= 255.0
 
+        for point in negative_points:
+            plt.plot(point[0], point[1], 'ro', markersize=5)
+
         show_mask(mask_np, plt.gca(), random_color=True)
 
     """
@@ -807,15 +997,23 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         label = pair['label']  # Use the label directly from the pair
         show_box(box, plt.gca(), label)
 
+    save_label = save_path
+    if just_measuring:
+        save_label += "_inpainted"
+
     plt.axis('off')
     plt.savefig(
-        os.path.join(output_dir, f"cropped_{save_path}.jpg"),
+        os.path.join(output_dir, f"grounded_sam_output_{save_label}.jpg"),
         bbox_inches="tight", dpi=300, pad_inches=0.0
     )
 
-    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path)
+    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path,crop_x, crop_y, original_size, just_measuring)
 
-    return detection_status
+    if detection_status == 'None' or detection_status == 'hair_found':
+        return detection_status
+    else:
+        return box_areas
+    
 
 
 
@@ -846,9 +1044,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--box_threshold", type=float, default=0.3, help="box threshold")
     parser.add_argument("--text_threshold", type=float, default=0.25, help="text threshold")
+    parser.add_argument("--character_prompt", type=str, default="", help="middle boy standing")
 
     parser.add_argument("--device", type=str, default="cpu", help="running on cpu only!, default=False")
     parser.add_argument("--save_path", type=str, default="", help="ending to file")
+    parser.add_argument("--just_measuring", type=bool, default=False, help="just measuring the area of specified boxes or not")
+    parser.add_argument("--negative_points", type=list, default=[], help="points cords to be excluded from the mask")
     args = parser.parse_args()
 
     # Call the new function with the parsed arguments
@@ -865,5 +1066,8 @@ if __name__ == "__main__":
         args.box_threshold,
         args.text_threshold,
         args.device,
-        args.save_path
+        args.character_prompt,
+        args.save_path,
+        args.just_measuring,
+        args.negative_points
     )
