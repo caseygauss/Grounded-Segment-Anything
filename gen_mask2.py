@@ -570,7 +570,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     if character_prompt != "":
         
         char_boxes_filt, char_pred_phrases = get_grounding_output(
-            model, original_image, character_prompt, 0.2, 0.01, device=device
+            model, original_image, character_prompt, 0.1, 0.01, device=device
         )
 
         print("Character box count is", len(char_boxes_filt))

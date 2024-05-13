@@ -566,8 +566,9 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
     char_save_path = save_path.split("_")[0]
 
     if character_prompt != "":
+        print("Using negative character box")
         char_boxes_filt, char_pred_phrases = get_grounding_output(
-            model, original_image, character_prompt, 0.25, 0.01, device=device
+            model, original_image, character_prompt, 0.32, 0.01, device=device
         )
         #print("Character box count is", len(char_boxes_filt))
         # Prepare to save images for each box
@@ -588,6 +589,8 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
             cropped_image = original_image_pil.crop((left, upper, right, lower))
             file_name = f"cropped_img_{char_save_path}_option_{i + 1}.jpg"
             cropped_image.save(os.path.join(output_dir, file_name))
+
+            crop_x, crop_y = left, upper
 
             # If the current box is the specified one, save it with a special name
             if box_to_use_num is not None and (i+1) == box_to_use_num:
