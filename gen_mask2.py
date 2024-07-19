@@ -179,6 +179,10 @@ def get_grounding_output(model, image, caption, box_threshold, text_threshold, w
         outputs = model(image[None], captions=[caption])
     logits = outputs["pred_logits"].cpu().sigmoid()[0]  # (nq, 256)
     boxes = outputs["pred_boxes"].cpu()[0]  # (nq, 4)
+
+    # Debugging: Print logits and boxes shapes
+    print(f"logits.shape: {logits.shape}, boxes.shape: {boxes.shape}")
+
     logits.shape[0]
 
     # filter output
@@ -187,11 +191,20 @@ def get_grounding_output(model, image, caption, box_threshold, text_threshold, w
     filt_mask = logits_filt.max(dim=1)[0] > box_threshold
     logits_filt = logits_filt[filt_mask]  # num_filt, 256
     boxes_filt = boxes_filt[filt_mask]  # num_filt, 4
+
+    # Debugging: Print filtered logits and boxes shapes
+    print(f"logits_filt.shape: {logits_filt.shape}, boxes_filt.shape: {boxes_filt.shape}")
+
+     # Ensure the logits_filt size is not zero before further processing
+    if logits_filt.size(0) == 0:
+        return torch.empty((0, 4)), []  # Return empty results if no logits are above the threshold
+    
     logits_filt.shape[0]
 
     # get phrase
     tokenlizer = model.tokenizer
     tokenized = tokenlizer(caption)
+
     # build pred
     pred_phrases = []
     for logit, box in zip(logits_filt, boxes_filt):
@@ -419,6 +432,31 @@ def face_confidence_score(box_label_pairs, image_size, center_weight=0.65, confi
 
     return best_pair
 
+def face_confidence_score(box_label_pairs):
+    """
+    Selects the face box with the highest confidence score.
+
+    :param box_label_pairs: List of dictionaries, each containing a 'box' and a 'score'.
+    :return: The dictionary (pair) with the highest confidence score.
+    """
+    if not box_label_pairs:
+        return None
+
+    # Initialize variables to keep track of the best pair
+    best_pair = None
+    highest_score = -float('inf')
+
+    # Iterate over all box-label pairs to find the one with the highest score
+    for pair in box_label_pairs:
+        confidence_score = pair['score']
+        
+        # Update the best pair if the current score is higher than the highest score seen so far
+        if confidence_score > highest_score:
+            highest_score = confidence_score
+            best_pair = pair
+
+    return best_pair
+
 
 def box_center(box):
     """
@@ -544,14 +582,31 @@ def filter_and_limit_boxes(box_label_pairs, face_box, image_width, max_count):
     
     return limited_pairs
 
-def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None):
+def show_tensor_image(tensor_img):
+    """ Utility function to display a tensor image """
+    tensor_img = tensor_img.cpu()
+    if tensor_img.ndimension() == 4:
+        tensor_img = tensor_img.squeeze(0)
+    # Normalize tensor values to [0, 1] for displaying with imshow
+    tensor_img = (tensor_img - tensor_img.min()) / (tensor_img.max() - tensor_img.min())
+    plt.imshow(tensor_img.permute(1, 2, 0).numpy())
+    plt.show()
+
+def show_image(img_pil):
+    """ Utility function to display a PIL image """
+    plt.imshow(np.array(img_pil))
+    plt.show()
+
+def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human"):
     detection_status = "None"
 
     print("box to use num is", box_to_use_num)
+    print("character prompt is", character_prompt)
 
     # make dir
     os.makedirs(output_dir, exist_ok=True)
     # load image
+    print("The image path is", image_path)
     original_image_pil, original_image = load_image(image_path)
     original_size = original_image_pil.size
     # load model
@@ -567,9 +622,12 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
     char_save_path = save_path.split("_")[0]
 
-    cropped_area = 0
+    print("Character_prompt is: ", character_prompt)
+    print("Box coordinates are: ", box_coordinates)
+    
+    if character_prompt != "" and not box_coordinates:
 
-    if character_prompt != "":
+        all_box_coordinates = {}
         
         char_boxes_filt, char_pred_phrases = get_grounding_output(
             model, original_image, character_prompt, 0.1, 0.01, device=device
@@ -601,52 +659,63 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             scaled_box[2:] += scaled_box[:2]
             left, upper, right, lower = scaled_box.cpu().numpy().tolist()
 
+            # Save coordinates
+            all_box_coordinates[f"box_{i + 1}"] = {"left": left, "upper": upper, "right": right, "lower": lower}
+            #print("running box coordinates: ", all_box_coordinates[f"box_{i + 1}"])
+
             # Crop the image to the character box
             cropped_image = original_image_pil.crop((left, upper, right, lower))
+            print("Setting the cropped options...")
             file_name = f"cropped_img_{char_save_path}_option_{i + 1}.jpg"
             cropped_image.save(os.path.join(output_dir, file_name))
 
             crop_x, crop_y = left, upper
-            cropped_area = (right - left) * (lower - upper)
 
-            # If the current box is the specified one, save it with a special name
-            if box_to_use_num is not None and (i+1) == box_to_use_num:
-                box_found = True
+            # Save a box to the base cropped image
+            if i == 0:
                 special_file_name = f"cropped_img_{char_save_path}.jpg"
                 cropped_image.save(os.path.join(output_dir, special_file_name))
-                break
 
             box_found = True
-
-        # Optionally, if no specific box is to be highlighted but we want to save the highest score box:
-        if box_to_use_num is None and top_char_boxes:
-            highest_score_box = top_char_boxes[0]
-            scaled_box = highest_score_box * torch.Tensor([W, H, W, H])
-            scaled_box[:2] -= scaled_box[2:] / 2
-            scaled_box[2:] += scaled_box[:2]
-            left, upper, right, lower = scaled_box.cpu().numpy().tolist()
-            cropped_image = original_image_pil.crop((left, upper, right, lower))
-            cropped_image.save(os.path.join(output_dir, f"cropped_img_{char_save_path}.jpg"))
-
-            crop_x, crop_y = left, upper
-            cropped_area = (right - left) * (lower - upper)
 
         if not box_found:
             print("No character box found")
             return "None"
+        else:
+            print("Returning all box coordinates: ", all_box_coordinates)
+            return all_box_coordinates
+        
+    # If box coordinates exist, then create a crop of the base image using the coordinates
+    if box_coordinates:
+        crop_x = box_coordinates["left"]
+        crop_y = box_coordinates["upper"]
+        crop_width = box_coordinates["right"] - box_coordinates["left"]
+        crop_height = box_coordinates["lower"] - box_coordinates["upper"]
+        cropped_pil = original_image_pil.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
 
-    cropped_image_path = os.path.join(output_dir, f"cropped_img_{char_save_path}.jpg")
-    #print("Cropped image path:", cropped_image_path)
+        # Display the cropped image
+        # Ensure the cropped image is in RGB format
+        cropped_pil = cropped_pil.convert("RGB")
 
-    cropped_pil, cropped_img = load_image(cropped_image_path)
+        # Convert to tensor if needed
+        cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
+
+        print(f"Cropped image tensor shape: {cropped_img.shape}")
+
+        # Show the tensor image for verification
+        #show_tensor_image(cropped_img)
 
     if text_prompt == "":
         return "Done"
 
     # run grounding dino model
-    boxes_filt, pred_phrases = get_grounding_output(
-        model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
-    )
+    try:
+        boxes_filt, pred_phrases = get_grounding_output(
+            model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
+        )
+    except:
+        print("Error getting grounding output")
+        return "None"
 
     # Categorize boxes by label
     #face_boxes = [box for box, label in zip(boxes_filt, pred_phrases) if 'face' in label]
@@ -663,17 +732,31 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     hair_boxes = []
     main_character_boxes = []
     main_character_scores = []
+    pet_boxes =[]
     other_boxes = []
 
-    # initialize SAM
+    #print("Crop x and crop y are", crop_x, crop_y)
+
+    # Initialize SAM
     if use_sam_hq:
         predictor = SamPredictor(sam_hq_model_registry[sam_version](checkpoint=sam_hq_checkpoint).to(device))
         print("Using SAM-HQ")
     else:
         predictor = SamPredictor(sam_model_registry[sam_version](checkpoint=sam_checkpoint).to(device))
-    image = cv2.imread(cropped_image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    predictor.set_image(image)
+
+    # Convert the PIL image to a NumPy array
+    image_np = np.array(cropped_pil)
+
+    # Convert the NumPy array to RGB if it's not already (PIL images are in RGB by default)
+    if image_np.shape[2] == 4:  # Check if the image has an alpha channel
+        image_np = image_np[:, :, :3]  # Drop the alpha channel
+
+    # Ensure the image is in RGB format
+    #image = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+    image=image_np
+
+    # Set the image in the predictor
+    predictor.set_image(image_np)
 
     size = cropped_pil.size
     H, W = size[1], size[0]
@@ -684,16 +767,14 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         boxes_filt[i][2:] += boxes_filt[i][:2]
 
     boxes_filt = boxes_filt.cpu()
-
-    threshold_area = 1 * cropped_area  ## moving this to 100% because struggling to get it to work at lower amounts
-    print("Box area threshold is", threshold_area)
+    #print("Box area threshold is", threshold_area)
 
     for box, label in zip(boxes_filt, pred_phrases):
         box_width = box[2] - box[0]
         box_height = box[3] - box[1]
         box_area = box_width * box_height
         box_area = box_area.item()  # Convert tensor to float
-        print(f"Box {label} area is {box_area}")
+        
 
         ##Something wrong here not looking at the same boxes for comparison
         #if box_area > threshold_area:
@@ -701,6 +782,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
         score = float(label.split('(')[-1].strip(')'))  # Extract the score
         info_obj = {'box': box, 'label': label, 'score': score}
+        print(f"Box found - {info_obj['label']} with score {info_obj['score']}")
         if 'face' in label:
             face_boxes.append(info_obj)
             face_scores.append(score)
@@ -713,6 +795,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             ear_boxes.append(info_obj)
         elif 'hair' in label:
             hair_boxes.append(info_obj)
+        elif 'dog' in label or 'cat' in label or 'kitten' in label:
+            pet_boxes.append(info_obj)
         elif 'main character' in label:
             main_character_boxes.append(info_obj)
             score = float(label.split('(')[-1].strip(')'))  # Extracting the confidence score from the label
@@ -752,6 +836,11 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
                 #No Hair box, so we're going to skip the rest of the code
                 print("No hair box found in the zone")
                 #return "None"
+        elif pet_boxes:
+            #No hair box, so we're going to skip the rest of the code
+            print("Pet box found in the zone")
+            focal_box = [pet_boxes[0]['box']]
+            focal_box_label = pet_boxes[0]['label']
         else:
             #No hair box, so we're going to skip the rest of the code
             print("No hair box found")
@@ -764,7 +853,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     if face_boxes:
         detection_status = "face_found"
         #highest_confidence_face_box = select_highest_confidence_face_box(face_boxes, face_scores)
-        chosen_pair = face_confidence_score(face_boxes, (W, H), center_weight=0.65, confidence_weight=0.35)
+        chosen_pair = face_confidence_score(face_boxes)
         if chosen_pair is not None:
             chosen_face_box = chosen_pair['box']
             focal_box = [chosen_face_box]
@@ -788,7 +877,10 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         focal_box_label = highest_score_pair['label']
     elif the_hair_box:
         detection_status = "hair_found"
-        print("hair was found")
+        #print("hair was found")
+    elif pet_boxes:
+        detection_status = "pet_found"
+        #print("pet was found")
     else:
         detection_status = "None"
         ##If close_boxes is empty, then we're going to skip the rest of the code
@@ -798,7 +890,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     all_selected_pairs = []
     close_boxes = []
 
-    if focal_box is not None and detection_status != 'hair_found' and not main_character_boxes:
+    if focal_box is not None and detection_status != 'hair_found' and not main_character_boxes and not pet_boxes:
         # Filter boxes near the selected face box with an increased threshold
         #close_boxes = filter_boxes_near_face_box(boxes_filt, highest_confidence_face_box, 200)
         # Assuming each *_boxes variable is now a list of dictionaries with 'box' and 'label' (and optionally 'score')
@@ -828,6 +920,11 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         #print('The closest hair pair is ', closest_hair_pair)
         close_boxes = the_hair_box
         all_selected_pairs = [closest_hair_pair]
+    elif pet_boxes:
+        print('Pet box found in the zone')
+        for pair in pet_boxes:
+            close_boxes.append(pair['box'])
+        all_selected_pairs = [pair for pair in pet_boxes]
         
     if focal_box is not None and the_hair_box is None:
         close_boxes += focal_box
@@ -850,13 +947,17 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         box_area = round(box_area.item(), 2)
 
         box_areas[label] = box_area
-    print("Close boxes:", close_boxes)
+    #print("Close boxes:", close_boxes)
 
     masks_to_use = []
     scores_to_use = []
 
     if not negative_points:
-        boxes_filt = torch.stack(close_boxes)
+        try:
+            boxes_filt = torch.stack(close_boxes)
+        except:
+            print("Did not find any boxes")
+            return "None"
 
         #print("Later boxes_filt:", boxes_filt)
         transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(device)
@@ -921,7 +1022,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
        # print("Points tensor shape:", expanded_points_tensor.shape)
        # print("Labels tensor shape:", labels_tensor.shape)
 
-        # Now, you can pass these to your model
+        # Now, you can pass these to the model
         masks_list, scores, logits = predictor.predict_torch(
             point_coords=expanded_points_tensor,
             point_labels=expanded_labels_tensor,
@@ -964,6 +1065,12 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     # Dilate each mask to add padding
     #print(f"Number of selected masks: {len(masks_to_use)}")
     dilation_amt = 25  # Adjust this as needed
+
+    if is_poster:
+        dilation_amt = 10
+
+    if char_type == "dog" or char_type == "cat":
+        dilation_amt = 5
     
     padded_masks = []
 
@@ -1002,10 +1109,12 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     filled_combined_mask = combine_and_fill_gaps(padded_masks)
     #print("Filled combined mask:", filled_combined_mask)
 
-    # draw output image
-    plt.figure(figsize=(10, 10))
+    # Normalize image data
     if image.dtype == np.uint8:
         image = image.astype(np.float32) / 255.0
+
+    # draw output image
+    plt.figure(figsize=(10, 10))
 
     plt.imshow(image)
 
@@ -1024,6 +1133,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     for box, label in zip(boxes_filt, pred_phrases):
         show_box(box.numpy(), plt.gca(), label)
     """
+    print('all selected pairs length: ', len(all_selected_pairs))
     for pair in all_selected_pairs:
         box = pair['box'].numpy()  # Ensure the box is converted to numpy array if it's a tensor
         label = pair['label']  # Use the label directly from the pair
@@ -1038,8 +1148,9 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         os.path.join(output_dir, f"grounded_sam_output_{save_label}.jpg"),
         bbox_inches="tight", dpi=300, pad_inches=0.0
     )
+    plt.close()
 
-    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path,crop_x, crop_y, original_size, just_measuring)
+    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring)
 
     if detection_status == 'None' or detection_status == 'hair_found':
         return detection_status
@@ -1081,6 +1192,8 @@ if __name__ == "__main__":
     parser.add_argument("--just_measuring", type=bool, default=False, help="just measuring the area of specified boxes or not")
     parser.add_argument("--negative_points", type=list, default=[], help="points cords to be excluded from the mask")
     parser.add_argument("--box_to_use_num", type=int, default=None, help="box number of main char to use for masking")
+    parser.add_argument("--is_poster", type=bool, default=False, help="is poster or not")
+    parser.add_argument("--char_type", type=str, default="human", help="character type")
     args = parser.parse_args()
 
     # Call the new function with the parsed arguments
@@ -1101,5 +1214,7 @@ if __name__ == "__main__":
         args.save_path,
         args.just_measuring,
         args.negative_points,
-        args.box_to_use_num
+        args.box_to_use_num,
+        args.is_poster,
+        args.char_type
     )
