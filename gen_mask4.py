@@ -1156,6 +1156,10 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
                 # Do not dilate the mask but add it to padded_masks
                 padded_masks.append(torch.from_numpy(np.array(mask_np)).unsqueeze(0))
 
+    ##IF there are no masks, return none
+    if len(padded_masks) == 0:
+        return None
+
     area_dict = {}
     binary_padded_masks = []
     for i, (mask, pair) in enumerate(zip(padded_masks, all_selected_pairs)):

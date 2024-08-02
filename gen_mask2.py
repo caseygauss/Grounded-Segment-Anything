@@ -167,16 +167,64 @@ def load_model(model_config_path, model_checkpoint_path, device):
     _ = model.eval()
     return model
 
+def resize_image(image, min_size=300):
+    """
+    Resize the image to ensure the smallest dimension is at least min_size while maintaining the aspect ratio.
+    """
+    width, height = image.size
+    scale_factor = 1
+    if min(width, height) < min_size:
+        # Calculate the new size while maintaining aspect ratio
+        if width < height:
+            new_width = min_size
+            new_height = int((min_size / width) * height)
+            scale_factor = min_size / width
+        else:
+            new_height = min_size
+            new_width = int((min_size / height) * width)
+            scale_factor = min_size / height
+        
+        # Resize the image
+        image = image.resize((new_width, new_height), Image.ANTIALIAS)
+        print(f"Image resized to: {new_width}x{new_height}")
+    return image, scale_factor
+
+def scale_boxes(boxes, scale_factor):
+    """
+    Scale the bounding boxes back to the original image size.
+    """
+    boxes = boxes / scale_factor
+    return boxes
+
 
 def get_grounding_output(model, image, caption, box_threshold, text_threshold, with_logits=True, device="cpu"):
     caption = caption.lower()
     caption = caption.strip()
     if not caption.endswith("."):
         caption = caption + "."
-    model = model.to(device)
-    image = image.to(device)
-    with torch.no_grad():
-        outputs = model(image[None], captions=[caption])
+
+    try:
+        model = model.to(device)
+        print("Model moved to device:", device)
+        
+        if not isinstance(image, torch.Tensor):
+            raise ValueError("Image should be a torch tensor")
+        
+        image = image.to(device)
+        print("Image moved to device:", device)
+        print(f"Image shape: {image.shape}")
+    except Exception as e:
+        print(f"Error during preparation: {e}")
+        return "None"
+
+    try:
+        with torch.no_grad():
+            outputs = model(image[None], captions=[caption])
+        print("Model inference completed")
+    except Exception as e:
+        print(f"Error during model inference: {e}")
+        return "None"
+
     logits = outputs["pred_logits"].cpu().sigmoid()[0]  # (nq, 256)
     boxes = outputs["pred_boxes"].cpu()[0]  # (nq, 4)
 
@@ -629,9 +677,13 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
         all_box_coordinates = {}
         
-        char_boxes_filt, char_pred_phrases = get_grounding_output(
-            model, original_image, character_prompt, 0.1, 0.01, device=device
-        )
+        try:
+            char_boxes_filt, char_pred_phrases = get_grounding_output(
+                model, original_image, character_prompt, 0.1, 0.01, device=device
+            )
+        except:
+            print("Error getting grounding output")
+            return "None"
 
         print("Character box count is", len(char_boxes_filt))
 
@@ -697,6 +749,9 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         # Ensure the cropped image is in RGB format
         cropped_pil = cropped_pil.convert("RGB")
 
+        # Resize the cropped image if necessary because the model needs a specific size
+        cropped_pil, scale_factor = resize_image(cropped_pil, min_size=300)
+
         # Convert to tensor if needed
         cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
 
@@ -713,6 +768,10 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         boxes_filt, pred_phrases = get_grounding_output(
             model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
         )
+
+        # Scale the bounding boxes back to the original image size
+        boxes_filt = scale_boxes(boxes_filt, scale_factor)
+
     except:
         print("Error getting grounding output")
         return "None"
@@ -918,8 +977,10 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     elif the_hair_box:
         #print('The closest hair box is:', the_hair_box)
         #print('The closest hair pair is ', closest_hair_pair)
-        close_boxes = the_hair_box
-        all_selected_pairs = [closest_hair_pair]
+        for pair in ear_boxes:
+            close_boxes.append(pair['box'])
+        close_boxes.append(closest_hair_pair['box'])  # Assuming closest_hair_pair is a dict
+        all_selected_pairs = [closest_hair_pair] + ear_boxes
     elif pet_boxes:
         print('Pet box found in the zone')
         for pair in pet_boxes:
