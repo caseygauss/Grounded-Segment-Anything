@@ -33,48 +33,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def measure_eye_unevenness(selected_eye_boxes):
-    """
-    Measures the unevenness of eyes based on their bounding boxes.
-    
-    :param selected_eye_boxes: A list or tensor of selected eye bounding boxes.
-                               Each box should be in the format [x1, y1, x2, y2].
-    :return: A dictionary containing the vertical offset, width difference, height difference, and a combined unevenness score.
-    """
-    if len(selected_eye_boxes) < 2:
-        raise ValueError("Insufficient eye boxes to measure unevenness. Two boxes required.")
-    
-    # Convert to numpy array for easier manipulation if it's a tensor
-    if isinstance(selected_eye_boxes, torch.Tensor):
-        selected_eye_boxes = selected_eye_boxes.cpu().numpy()
-    
-    # Calculate the center, width, and height of each eye box
-    centers = [(box[0]+box[2])/2.0 for box in selected_eye_boxes]
-    widths = [abs(box[2]-box[0]) for box in selected_eye_boxes]
-    heights = [abs(box[3]-box[1]) for box in selected_eye_boxes]
-    vertical_centers = [(box[1]+box[3])/2.0 for box in selected_eye_boxes]
-    
-    # Calculate differences
-    vertical_offset = abs(vertical_centers[0] - vertical_centers[1])
-    width_difference = abs(widths[0] - widths[1])
-    height_difference = abs(heights[0] - heights[1])
-    
-    # Combine the differences into a single score (simple sum or weighted sum can be considered)
-    # This scoring can be adjusted based on how much weight you want to give each component
-    combined_unevenness_score = vertical_offset + width_difference + height_difference
-
-    # Print the calculated values for troubleshooting
-    print(f"Vertical Offset: {vertical_offset}")
-    print(f"Width Difference: {width_difference}")
-    print(f"Height Difference: {height_difference}")
-    print(f"Combined Unevenness Score: {combined_unevenness_score}")
-    
-    return {
-        "vertical_offset": vertical_offset,
-        "width_difference": width_difference,
-        "height_difference": height_difference,
-        "combined_unevenness_score": combined_unevenness_score
-    }
 
 def dilate_mask(mask, dilation_amt):
     # Create the dilation kernel
