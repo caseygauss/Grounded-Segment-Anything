@@ -97,7 +97,7 @@ def dilate_mask(mask, dilation_amt):
 
 
 # Clean mask function
-def clean_mask(mask, min_size=500):
+def clean_mask(mask, min_size=600):
     mask = binary_opening(mask, structure=np.ones((3, 3)))
     mask = remove_small_objects(mask.astype(bool), min_size=min_size)
     return mask.astype(np.float32) # Ensure the same dtype is retained
@@ -670,7 +670,7 @@ def scale_boxes(boxes, scale_factor):
     boxes = boxes / scale_factor
     return boxes
 
-def resize_image(image, min_size=300):
+def resize_image(image, min_size=600):
     """
     Resize the image to ensure the smallest dimension is at least min_size while maintaining the aspect ratio.
     """
@@ -688,11 +688,11 @@ def resize_image(image, min_size=300):
             scale_factor = min_size / height
         
         # Resize the image
-        image = image.resize((new_width, new_height), Image.ANTIALIAS)
+        image = image.resize((new_width, new_height), Image.LANCZOS)
         print(f"Image resized to: {new_width}x{new_height}")
     return image, scale_factor
 
-def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, box_to_use_num=None, box_coordinates={}, predictor=None):
+def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, box_to_use_num=None, box_coordinates={}, character_index=None, predictor=None):
     detection_status = "None"
 
     # make dir
@@ -713,7 +713,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
 
     cropped_area = 0
 
-    char_save_path = save_path.split("_")[0]
+    char_save_path = save_path
 
     if character_prompt != "" and not box_coordinates:
 
@@ -787,7 +787,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
         cropped_pil = cropped_pil.convert("RGB")
 
         # Resize the cropped image if necessary because the model needs a specific size
-        cropped_pil, scale_factor = resize_image(cropped_pil, min_size=300)
+        #cropped_pil, scale_factor = resize_image(cropped_pil, min_size=600)
 
         # Convert to tensor if needed
         cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
@@ -808,7 +808,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
         )
 
         # Scale the bounding boxes back to the original image size
-        boxes_filt = scale_boxes(boxes_filt, scale_factor)
+        #boxes_filt = scale_boxes(boxes_filt, scale_factor)
 
         torch.cuda.empty_cache()
 
@@ -891,7 +891,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
 
         info_obj = {'box': box, 'label': label_text, 'score': score}
         #print(f"Info object is {info_obj}")
-        if 'face' in label or 'chin' in label:
+        if 'face' in label or 'chin' in label and 'on face' not in label:
             face_boxes.append(info_obj)
             face_scores.append(score)
             #print(f"Face box: {box}, score: {score}")
@@ -912,7 +912,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
             negative_boxes.append(info_obj)
         elif 'arm' in label:
             negative_boxes.append(info_obj)
-        elif 'on head' in label:
+        elif 'on head' in label or 'on face' in label:
             negative_boxes.append(info_obj)
         elif 'clothes' in label or 'shirt' in label or "body" in label or "human" in label:
             negative_boxes.append(info_obj)
@@ -1423,6 +1423,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_path", type=str, default="", help="ending to file")
     parser.add_argument("--just_measuring", type=bool, default=False, help="just measuring the area of specified boxes or not")
     parser.add_argument("--box_to_use_num", type=int, default=None, help="the number of the character box to use")
+    parser.add_argument("--character_index", type=int, default=None, help="the index of the character to use")
     parser.add_argument("--predictor", type=str, default=None, help="predictor")
     args = parser.parse_args()
 
@@ -1444,5 +1445,6 @@ if __name__ == "__main__":
         args.save_path,
         args.just_measuring,
         args.box_to_use_num,
+        args.character_index,
         args.predictor
     )

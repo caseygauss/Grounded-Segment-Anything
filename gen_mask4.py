@@ -979,7 +979,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
 
     accepted_labels = [label for label in words_from_prompt if label not in ["hair", "face", "ear"]]
 
-   # Ensure we have boxes for hands, arms, and shirts
+    # Ensure we have boxes for hands, arms, and shirts
     hand_arm_shirt_boxes = [pair['box'] for pair in all_selected_pairs if 'hand' in pair['label'] or 'arm' in pair['label'] or 'shirt' in pair['label'] or pair['label'] in accepted_labels]
     # Add head, face, and neck to excluded regions
     #print(f"Excluded boxes: {excluded_boxes}")

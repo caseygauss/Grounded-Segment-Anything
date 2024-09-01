@@ -185,7 +185,7 @@ def resize_image(image, min_size=300):
             scale_factor = min_size / height
         
         # Resize the image
-        image = image.resize((new_width, new_height), Image.ANTIALIAS)
+        image = image.resize((new_width, new_height), Image.LANCZOS)
         print(f"Image resized to: {new_width}x{new_height}")
     return image, scale_factor
 

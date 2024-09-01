@@ -100,7 +100,7 @@ def dilate_mask(mask, dilation_amt):
     dilated_mask = Image.fromarray(dilated_binary_img.astype(np.uint8) * 255)
     return dilated_mask, dilated_binary_img
 
-def show_mask2(mask, ax, random_color=False, borders = True):
+def show_mask2(mask, ax, random_color=True, borders = True):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
@@ -216,7 +216,7 @@ def resize_image(image, min_size=300):
             scale_factor = min_size / height
         
         # Resize the image
-        image = image.resize((new_width, new_height), Image.ANTIALIAS)
+        image = image.resize((new_width, new_height), Image.LANCZOS)
         print(f"Image resized to: {new_width}x{new_height}")
     return image, scale_factor
 
@@ -360,7 +360,7 @@ def show_box2(box, ax):
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))    
 
 
-def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False):
+def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False, character_index=None):
     value = 0  # 0 for background
     background_alpha = 0.01
 
@@ -689,7 +689,7 @@ def clean_mask(mask, min_size=500):
     mask = remove_small_objects(mask.astype(bool), min_size=min_size)
     return mask.astype(np.float32)  # Ensure the mask is in float32 format
 
-def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human", predictor=None):
+def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human", character_index=None,predictor=None):
     detection_status = "None"
 
     print("box to use num is", box_to_use_num)
@@ -712,12 +712,12 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     crop_x = 0
     crop_y = 0
 
-    char_save_path = save_path.split("_")[0]
+    char_save_path = save_path
 
     print("Character_prompt is: ", character_prompt)
     print("Box coordinates are: ", box_coordinates)
     
-    if character_prompt != "" and not box_coordinates:
+    if character_prompt != "" and not box_coordinates and text_prompt != "Main Character.":
 
         all_box_coordinates = {}
         
@@ -744,8 +744,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         sorted_char_pred_phrases = [char_pred_phrases[i] for i in sorted_indices]
         
         # Limit to top 3 options
-        top_char_boxes = sorted_char_boxes[:3]
-        top_char_pred_phrases = sorted_char_pred_phrases[:3]
+        top_char_boxes = sorted_char_boxes[:5]
+        top_char_pred_phrases = sorted_char_pred_phrases[:5]
 
         for i, (box, label) in enumerate(zip(top_char_boxes, top_char_pred_phrases)):
             score = float(label.split('(')[-1].strip(')'))  # Extract the score
@@ -755,14 +755,25 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             scaled_box[2:] += scaled_box[:2]
             left, upper, right, lower = scaled_box.cpu().numpy().tolist()
 
+            ##expand box by 10px in each direction if possible
+            if left - 2 > 0:
+                left -= 2
+            if upper - 2 > 0:
+                upper -= 2
+            if right + 2 < W:
+                right += 2
+            if lower + 2 < H:
+                lower += 2
+
             # Save coordinates
             all_box_coordinates[f"box_{i + 1}"] = {"left": left, "upper": upper, "right": right, "lower": lower}
             #print("running box coordinates: ", all_box_coordinates[f"box_{i + 1}"])
 
             # Crop the image to the character box
             cropped_image = original_image_pil.crop((left, upper, right, lower))
-            print("Setting the cropped options...")
+            
             file_name = f"cropped_img_{char_save_path}_option_{i + 1}.jpg"
+            print("Saving the cropped images as: ", file_name)
             cropped_image.save(os.path.join(output_dir, file_name))
 
             crop_x, crop_y = left, upper
@@ -781,8 +792,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             print("Returning all box coordinates: ", all_box_coordinates)
             return all_box_coordinates
         
-    torch.cuda.empty_cache()
-    gc.collect()
+    scale_factor = 1
     # If box coordinates exist, then create a crop of the base image using the coordinates
     if box_coordinates:
         crop_x = box_coordinates["left"]
@@ -796,7 +806,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         cropped_pil = cropped_pil.convert("RGB")
 
         # Resize the cropped image if necessary because the model needs a specific size
-        cropped_pil, scale_factor = resize_image(cropped_pil, min_size=300)
+        #cropped_pil, scale_factor = resize_image(cropped_pil, min_size=300)
 
         # Convert to tensor if needed
         cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
@@ -805,6 +815,10 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
         # Show the tensor image for verification
         #show_tensor_image(cropped_img)
+    else:
+        cropped_img = cropped_image
+        cropped_pil = original_image_pil
+        #cropped_img = torch.from_numpy(np.array(cropped_img).transpose(2, 0, 1)).float().div(255.0)
 
     if text_prompt == "":
         return "Done"
@@ -816,7 +830,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         )
 
         # Scale the bounding boxes back to the original image size
-        boxes_filt = scale_boxes(boxes_filt, scale_factor)
+        #boxes_filt = scale_boxes(boxes_filt, scale_factor)
 
         torch.cuda.empty_cache()
 
@@ -1113,72 +1127,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             #plt.show()
             plt.close()
 
-        """
-         # Iterate over each set of masks and scores
-        for masks_set, scores_set in zip(masks_batch, scores_batch):
-            scores_tensor = torch.tensor(scores_set)
-            
-            # Initialize best mask selection
-            best_mask = None
-            best_score = -1
-
-            for mask, score_set in zip(masks_set, scores_tensor):
-                print("Mask type:", type(mask))
-                print("Score set type:", type(score_set))
-                print("Mask shape:", mask.shape)
-                print("Score set shape:", score_set.shape)
-
-                best_score = -1
-
-                for i in range(mask.shape[0]):
-                    mask_np = mask[i].astype(np.float32)
-                    if mask_np.max() > 1:
-                        mask_np /= 255.0
-
-                    print(f"Mask shape: {mask_np.shape}")
-                    print(f"Total number of elements in mask: {mask_np.size}")
-
-                    # Handle extra dimensions if needed
-                    if mask_np.shape[0] == 3:
-                        mask_np = mask_np.transpose(1, 2, 0)
-                        mask_np = mask_np[:, :, 0]
-
-                    # Ensure mask is 2D
-                    if len(mask_np.shape) == 3:
-                        mask_np = mask_np[:, :, 0]
-
-                    # Reshape mask if needed
-                    if mask_np.size == image.shape[0] * image.shape[1]:
-                        mask_np = mask_np.reshape(image.shape[0], image.shape[1])
-                    else:
-                        print(f"Error reshaping mask: expected {image.shape[0] * image.shape[1]} but got {mask_np.size}")
-                        continue
-                    
-                    plt.figure(figsize=(10, 10))
-                    plt.imshow(image)
-                    try:
-                        show_mask(mask_np, plt.gca())
-                    except ValueError as ve:
-                        print(f"Error reshaping mask: {ve}")
-                        plt.close()
-                        continue
-                    plt.title(f"Mask {i+1}, Score: {score_set[i].item():.3f}", fontsize=18)
-                    plt.axis('off')
-                    #plt.show()
-                    plt.close()
-
-                # Select the best mask based on the highest score
-                highest_score_index = torch.argmax(score_set).item()
-                if highest_score_index < mask.shape[0] and score_set[highest_score_index].item() > best_score:
-                    best_score = score_set[highest_score_index].item()
-                    best_mask = mask[highest_score_index]
-
-                if best_mask is not None:
-                    best_mask = clean_mask(best_mask)  # Clean the best mask
-                    masks_to_use.append(torch.tensor(best_mask).to(device))
-                else:
-                    print("No valid mask found for this set")
-                    """
+        
         print("Length of masks_to_use:", len(masks_to_use))
     else:
     
@@ -1249,7 +1198,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
                     plt.figure(figsize=(10, 10))
                     plt.imshow(image)
                     try:
-                        show_mask(mask_np, plt.gca())
+                        show_mask2(mask_np, plt.gca(), random_color=True)
                     except ValueError as ve:
                         print(f"Error reshaping mask: {ve}")
                         plt.close()
@@ -1362,7 +1311,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     )
     plt.close()
 
-    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring)
+    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring, character_index)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -1410,6 +1359,7 @@ if __name__ == "__main__":
     parser.add_argument("--box_to_use_num", type=int, default=None, help="box number of main char to use for masking")
     parser.add_argument("--is_poster", type=bool, default=False, help="is poster or not")
     parser.add_argument("--char_type", type=str, default="human", help="character type")
+    parser.add_argument("--character_index", type=int, default=None, help="character index")
     parser.add_argument("--predictor", type=str, default=None, help="predictor")
     args = parser.parse_args()
 
@@ -1434,5 +1384,6 @@ if __name__ == "__main__":
         args.box_to_use_num,
         args.is_poster,
         args.char_type,
+        args.character_index,
         args.predictor
     )

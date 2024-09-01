@@ -90,7 +90,7 @@ def measure_eye_unevenness(selected_eye_boxes):
     }
 
 # Function to clean mask
-def clean_mask(mask, min_size=500):
+def clean_mask(mask, min_size=600):
     mask = binary_opening(mask, structure=np.ones((3, 3)))
     mask = remove_small_objects(mask.astype(bool), min_size=min_size)
     return mask.astype(np.float32)  # Ensure the mask is in float32 format
@@ -199,18 +199,71 @@ def load_model(model_config_path, model_checkpoint_path, device):
     _ = model.eval()
     return model
 
+def resize_image(image, min_size=600):
+    """
+    Resize the image to ensure the smallest dimension is at least min_size while maintaining the aspect ratio.
+    """
+    width, height = image.size
+    scale_factor = 1
+    if min(width, height) < min_size:
+        # Calculate the new size while maintaining aspect ratio
+        if width < height:
+            new_width = min_size
+            new_height = int((min_size / width) * height)
+            scale_factor = min_size / width
+        else:
+            new_height = min_size
+            new_width = int((min_size / height) * width)
+            scale_factor = min_size / height
+        
+        # Resize the image
+        image = image.resize((new_width, new_height), Image.LANCZOS)
+        print(f"Image resized to: {new_width}x{new_height}")
+    return image, scale_factor
+
+def scale_boxes(boxes, scale_factor):
+    """
+    Scale the bounding boxes back to the original image size.
+    """
+    print(f"\n\nScaling boxes: {scale_factor}")
+    boxes = boxes / scale_factor
+    
+    return boxes
 
 def get_grounding_output(model, image, caption, box_threshold, text_threshold, with_logits=True, device="cpu"):
     caption = caption.lower()
     caption = caption.strip()
     if not caption.endswith("."):
         caption = caption + "."
-    model = model.to(device)
-    image = image.to(device)
-    with torch.no_grad():
-        outputs = model(image[None], captions=[caption])
+
+    try:
+        model = model.to(device)
+        print("Model moved to device:", device)
+        
+        if not isinstance(image, torch.Tensor):
+            raise ValueError("Image should be a torch tensor")
+        
+        image = image.to(device)
+        print("Image moved to device:", device)
+        print(f"Image shape: {image.shape}")
+    except Exception as e:
+        print(f"Error during preparation: {e}")
+        return "None"
+
+    try:
+        with torch.no_grad():
+            outputs = model(image[None], captions=[caption])
+        print("Model inference completed")
+    except Exception as e:
+        print(f"Error during model inference: {e}")
+        return "None"
+
     logits = outputs["pred_logits"].cpu().sigmoid()[0]  # (nq, 256)
     boxes = outputs["pred_boxes"].cpu()[0]  # (nq, 4)
+
+    # Debugging: Print logits and boxes shapes
+    print(f"logits.shape: {logits.shape}, boxes.shape: {boxes.shape}")
+
     logits.shape[0]
 
     # filter output
@@ -219,11 +272,20 @@ def get_grounding_output(model, image, caption, box_threshold, text_threshold, w
     filt_mask = logits_filt.max(dim=1)[0] > box_threshold
     logits_filt = logits_filt[filt_mask]  # num_filt, 256
     boxes_filt = boxes_filt[filt_mask]  # num_filt, 4
+
+    # Debugging: Print filtered logits and boxes shapes
+    print(f"logits_filt.shape: {logits_filt.shape}, boxes_filt.shape: {boxes_filt.shape}")
+
+     # Ensure the logits_filt size is not zero before further processing
+    if logits_filt.size(0) == 0:
+        return torch.empty((0, 4)), []  # Return empty results if no logits are above the threshold
+    
     logits_filt.shape[0]
 
     # get phrase
     tokenlizer = model.tokenizer
     tokenized = tokenlizer(caption)
+
     # build pred
     pred_phrases = []
     for logit, box in zip(logits_filt, boxes_filt):
@@ -585,7 +647,7 @@ def filter_and_limit_boxes(box_label_pairs, face_box, image_width, max_count):
     
     return limited_pairs
 
-def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, predictor=None):
+def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, predictor=None, character_index=None):
     detection_status = "None"
 
     print("box to use num is", box_to_use_num)
@@ -606,7 +668,7 @@ def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, 
     crop_x = 0
     crop_y = 0
 
-    char_save_path = save_path.split("_")[0]
+    char_save_path = save_path
 
     cropped_area = 0
 
@@ -675,21 +737,29 @@ def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, 
 
         cropped_pil = cropped_pil.convert("RGB")
 
+        # Resize the cropped image if necessary because the model needs a specific size
+        #cropped_pil, scale_factor = resize_image(cropped_pil, min_size=600)
+
         # Convert to tensor if needed
         cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
 
     if text_prompt == "":
         return "Done"
 
-    # run grounding dino model
-    boxes_filt, pred_phrases = get_grounding_output(
-        model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
-    )
+    try:
+        # run grounding dino model
+        boxes_filt, pred_phrases = get_grounding_output(
+            model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
+        )
+        # Scale the bounding boxes back to the original image size
+        #boxes_filt = scale_boxes(boxes_filt, scale_factor)
 
-    torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
+    except:
+        print("Error getting grounding output")
+        return "None"
 
-    #predictor = SAM2ImagePredictor(build_sam2(model_cfg, checkpoint_path))
-
+   
     # Categorize boxes by label
     #face_boxes = [box for box, label in zip(boxes_filt, pred_phrases) if 'face' in label]
     #hair_boxes = [box for box, label in zip(boxes_filt, pred_phrases) if 'hair' in label]
@@ -1108,6 +1178,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_path", type=str, default="", help="ending to file")
     parser.add_argument("--just_measuring", type=bool, default=False, help="just measuring the area of specified boxes or not")
     parser.add_argument("--negative_points", type=list, default=[], help="points cords to be excluded from the mask")
+    parser.add_argument("--character_index", type=int, default=None, help="character index")
     parser.add_argument("--box_to_use_num", type=int, default=None, help="box number of main char to use for masking")
     parser.add_argument("--predictor", type=str, default=None, help="predictor")
     args = parser.parse_args()
@@ -1131,5 +1202,6 @@ if __name__ == "__main__":
         args.just_measuring,
         args.negative_points,
         args.box_to_use_num,
-        args.predictor
+        args.predictor,
+        args.character_index
     )
