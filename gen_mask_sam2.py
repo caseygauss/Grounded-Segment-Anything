@@ -12,6 +12,8 @@ from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import binary_dilation, binary_opening
 from skimage.morphology import remove_small_objects
 
+import torch.nn.functional as F
+
 import cv2
 
 # Grounding DINO
@@ -360,9 +362,10 @@ def show_box2(box, ax):
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0, 0, 0, 0), lw=2))    
 
 
-def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False, character_index=None):
+def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False, character_index=None, scale_factor=1):
     value = 0  # 0 for background
     background_alpha = 0.01
+
 
     # Assume mask_tensor is a PyTorch tensor of shape [1, height, width]
     mask_np = mask_tensor.cpu().numpy().squeeze()  # Convert to numpy and remove the first dimension
@@ -373,11 +376,21 @@ def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, sa
     # Create an RGBA image with the same dimensions as the mask
     #mask_img = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
 
-    # Set the mask color and alpha
+    original_mask_size = (int(mask_np.shape[1] / scale_factor), int(mask_np.shape[0] / scale_factor))
+
+    # Resize mask_np to the original mask size
+    resized_mask_np = np.array(Image.fromarray(mask_np).resize(original_mask_size, Image.NEAREST))  # Resize mask down
+
+    # Create an RGBA image with the resized mask dimensions
+    mask_img_np = np.zeros((original_mask_size[1], original_mask_size[0], 4), dtype=np.uint8)
+
+    # Set the mask color (white with full opacity)
     mask_color = np.array([225, 225, 225, 255], dtype=np.uint8)  # White color mask with full opacity
-    mask_img_np = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
+
+
+    #original_mask = np.zeros((int(mask_np.shape[0]/scale_factor), int(mask_np.shape[1]/scale_factor), 4), dtype=np.uint8)
     # Apply the mask color and alpha to where mask_np indicates (assuming mask_np is a binary mask)
-    mask_img_np[mask_np > 0] = mask_color  # Update this condition based on how mask_np indicates the mask
+    mask_img_np[resized_mask_np > 0] = mask_color  # Update this condition based on how mask_np indicates the mask
 
     
     # Convert the numpy array to a PIL Image
@@ -387,7 +400,7 @@ def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, sa
     background_img = Image.new('RGBA', original_size, (0, 0, 0, 0))
     
     # Place the mask on the background at specified coordinates
-    background_img.paste(mask_img, (int(crop_x), int(crop_y)), mask_img)
+    background_img.paste(mask_img, (int(crop_x/scale_factor), int(crop_y/scale_factor)), mask_img)
 
 
     # Apply the mask color where mask_np is True
@@ -795,26 +808,27 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     scale_factor = 1
     # If box coordinates exist, then create a crop of the base image using the coordinates
     if box_coordinates:
-        crop_x = box_coordinates["left"]
-        crop_y = box_coordinates["upper"]
-        crop_width = box_coordinates["right"] - box_coordinates["left"]
-        crop_height = box_coordinates["lower"] - box_coordinates["upper"]
-        cropped_pil = original_image_pil.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
+        # Scale the base image and adjust coordinates
+        scaled_image, scaled_box_coordinates, scale_factor = scale_image_and_adjust_coordinates(
+            original_image_pil, box_coordinates
+        )
 
-        # Display the cropped image
+        crop_x = scaled_box_coordinates["left"]
+        crop_y = scaled_box_coordinates["upper"]
+        crop_width = scaled_box_coordinates["right"] - scaled_box_coordinates["left"]
+        crop_height = scaled_box_coordinates["lower"] - scaled_box_coordinates["upper"]
+
+        # Crop the scaled image using the adjusted coordinates
+        cropped_pil = scaled_image.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
+
         # Ensure the cropped image is in RGB format
         cropped_pil = cropped_pil.convert("RGB")
-
-        # Resize the cropped image if necessary because the model needs a specific size
-        #cropped_pil, scale_factor = resize_image(cropped_pil, min_size=300)
 
         # Convert to tensor if needed
         cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
 
-        print(f"Cropped image tensor shape: {cropped_img.shape}")
-
-        # Show the tensor image for verification
-        #show_tensor_image(cropped_img)
+        # Show the cropped image for troubleshooting
+        #cropped_pil.show()
     else:
         cropped_img = cropped_image
         cropped_pil = original_image_pil
@@ -828,9 +842,6 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         boxes_filt, pred_phrases = get_grounding_output(
             model, cropped_img, text_prompt, box_threshold, text_threshold, device=device
         )
-
-        # Scale the bounding boxes back to the original image size
-        #boxes_filt = scale_boxes(boxes_filt, scale_factor)
 
         torch.cuda.empty_cache()
 
@@ -1094,7 +1105,14 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         print("Boxes to use:", boxes_to_use)
         print("Length of boxes to use", len(boxes_to_use))
 
-        predictor.set_image_batch([image])
+        # Convert the tensor (CHW) back to a NumPy array (HWC)
+        cropped_img_np = cropped_img.permute(1, 2, 0).cpu().numpy()  # CHW to HWC
+
+        # Ensure the values are in the range [0, 255] and in RGB format
+        cropped_img_np = (cropped_img_np * 255).astype(np.uint8)  # Convert to uint8 format
+
+        # Pass the corrected NumPy array to the predictor
+        predictor.set_image_batch([cropped_img_np])
 
         with torch.autocast(device_type="cuda", dtype=torch.float16):
             masks_batch, scores_batch, _ = predictor.predict_batch(
@@ -1151,7 +1169,16 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         expanded_labels_tensor = labels_tensor.repeat(len(close_boxes), 1)
         print("Labels tensor shape:", expanded_labels_tensor.shape)
 
-        predictor.set_image_batch([image])
+        # Convert the tensor (CHW) back to a NumPy array (HWC)
+        cropped_img_np = cropped_img.permute(1, 2, 0).cpu().numpy()  # CHW to HWC
+
+        # Ensure the values are in the range [0, 255] and in RGB format
+        cropped_img_np = (cropped_img_np * 255).astype(np.uint8)  # Convert to uint8 format
+
+        # Pass the corrected NumPy array to the predictor
+        predictor.set_image_batch([cropped_img_np])
+
+        
         box_batch = [boxes_tensor.squeeze(0).cpu().numpy()]
 
         # Pass these to the model
@@ -1219,7 +1246,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
                     masks_to_use.append(torch.tensor(best_mask).to(device))
                 else:
                     print("No valid mask found for this set")
-    
+
     # Dilate each mask to add padding
     print(f"Number of selected masks: {len(masks_to_use)}")
     dilation_amt = 25  # Adjust this as needed
@@ -1311,7 +1338,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     )
     plt.close()
 
-    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring, character_index)
+    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring, character_index, scale_factor)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -1321,6 +1348,38 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         return detection_status
     else:
         return box_areas
+    
+# Function to scale an image and adjust coordinates
+def scale_image_and_adjust_coordinates(image, box_coordinates, min_width=600, max_dim=2000):
+    W, H = image.size  # Original image dimensions
+
+    # Calculate the width of the cropped box
+    crop_width = box_coordinates["right"] - box_coordinates["left"]
+
+    # Determine the scale factor based on minimum width or max dimension
+    if crop_width < min_width:
+        scale_factor = min_width / crop_width
+    else:
+        scale_factor = 1  # No scaling needed if width is already larger than min_width
+
+    # Ensure the scaled image doesn't exceed the max dimension
+    if max(W * scale_factor, H * scale_factor) > max_dim:
+        scale_factor = max_dim / max(W, H)
+
+    # Scale the entire image
+    new_width = int(W * scale_factor)
+    new_height = int(H * scale_factor)
+    scaled_image = image.resize((new_width, new_height))
+
+    # Adjust the box coordinates based on the scale factor
+    scaled_box_coordinates = {
+        "left": box_coordinates["left"] * scale_factor,
+        "upper": box_coordinates["upper"] * scale_factor,
+        "right": box_coordinates["right"] * scale_factor,
+        "lower": box_coordinates["lower"] * scale_factor,
+    }
+
+    return scaled_image, scaled_box_coordinates, scale_factor
     
 
 if __name__ == "__main__":

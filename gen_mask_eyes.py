@@ -339,7 +339,7 @@ def show_box(box, ax, label):
     ax.text(x0, y0, label)
 
 
-def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False):
+def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, save_path, crop_x, crop_y, original_size, just_measuring=False, scale_factor=1):
     value = 0  # 0 for background
     background_alpha = 0.01
 
@@ -353,10 +353,19 @@ def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, sa
     #mask_img = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
 
     # Set the mask color and alpha
+    original_mask_size = (int(mask_np.shape[1] / scale_factor), int(mask_np.shape[0] / scale_factor))
+
+    # Resize mask_np to the original mask size
+    resized_mask_np = np.array(Image.fromarray(mask_np).resize(original_mask_size, Image.NEAREST))  # Resize mask down
+
+    # Create an RGBA image with the resized mask dimensions
+    mask_img_np = np.zeros((original_mask_size[1], original_mask_size[0], 4), dtype=np.uint8)
+
+    # Set the mask color (white with full opacity)
     mask_color = np.array([225, 225, 225, 255], dtype=np.uint8)  # White color mask with full opacity
-    mask_img_np = np.zeros((mask_np.shape[0], mask_np.shape[1], 4), dtype=np.uint8)
+
     # Apply the mask color and alpha to where mask_np indicates (assuming mask_np is a binary mask)
-    mask_img_np[mask_np > 0] = mask_color  # Update this condition based on how mask_np indicates the mask
+    mask_img_np[resized_mask_np > 0] = mask_color  # Update this condition based on how mask_np indicates the mask
 
     
     # Convert the numpy array to a PIL Image
@@ -366,7 +375,7 @@ def save_mask_data(output_dir, mask_tensor, box_list, label_list, image_name, sa
     background_img = Image.new('RGBA', original_size, (0, 0, 0, 0))
     
     # Place the mask on the background at specified coordinates
-    background_img.paste(mask_img, (int(crop_x), int(crop_y)), mask_img)
+    background_img.paste(mask_img, (int(crop_x/scale_factor), int(crop_y/scale_factor)), mask_img)
 
 
     # Apply the mask color where mask_np is True
@@ -727,13 +736,20 @@ def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, 
             print("Returning all box coordinates: ", all_box_coordinates)
             return all_box_coordinates
 
+    scale_factor = 1
     # If box coordinates exist, then create a crop of the base image using the coordinates
     if box_coordinates:
-        crop_x = box_coordinates["left"]
-        crop_y = box_coordinates["upper"]
-        crop_width = box_coordinates["right"] - box_coordinates["left"]
-        crop_height = box_coordinates["lower"] - box_coordinates["upper"]
-        cropped_pil = original_image_pil.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
+        # Scale the base image and adjust coordinates
+        scaled_image, scaled_box_coordinates, scale_factor = scale_image_and_adjust_coordinates(
+            original_image_pil, box_coordinates
+        )
+
+        crop_x = scaled_box_coordinates["left"]
+        crop_y = scaled_box_coordinates["upper"]
+        crop_width = scaled_box_coordinates["right"] - scaled_box_coordinates["left"]
+        crop_height = scaled_box_coordinates["lower"] - scaled_box_coordinates["upper"]
+        
+        cropped_pil = scaled_image.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
 
         cropped_pil = cropped_pil.convert("RGB")
 
@@ -1133,7 +1149,7 @@ def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, 
     )
     plt.close()
 
-    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring)
+    save_mask_data(output_dir, filled_combined_mask, boxes_filt, pred_phrases, image_path, save_path, crop_x, crop_y, original_size, just_measuring, scale_factor)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -1143,6 +1159,38 @@ def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, 
         return detection_status
     else:
         return box_areas
+    
+# Function to scale an image and adjust coordinates
+def scale_image_and_adjust_coordinates(image, box_coordinates, min_width=600, max_dim=2000):
+    W, H = image.size  # Original image dimensions
+
+    # Calculate the width of the cropped box
+    crop_width = box_coordinates["right"] - box_coordinates["left"]
+
+    # Determine the scale factor based on minimum width or max dimension
+    if crop_width < min_width:
+        scale_factor = min_width / crop_width
+    else:
+        scale_factor = 1  # No scaling needed if width is already larger than min_width
+
+    # Ensure the scaled image doesn't exceed the max dimension
+    if max(W * scale_factor, H * scale_factor) > max_dim:
+        scale_factor = max_dim / max(W, H)
+
+    # Scale the entire image
+    new_width = int(W * scale_factor)
+    new_height = int(H * scale_factor)
+    scaled_image = image.resize((new_width, new_height))
+
+    # Adjust the box coordinates based on the scale factor
+    scaled_box_coordinates = {
+        "left": box_coordinates["left"] * scale_factor,
+        "upper": box_coordinates["upper"] * scale_factor,
+        "right": box_coordinates["right"] * scale_factor,
+        "lower": box_coordinates["lower"] * scale_factor,
+    }
+
+    return scaled_image, scaled_box_coordinates, scale_factor
     
 
 if __name__ == "__main__":
