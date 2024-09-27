@@ -739,25 +739,33 @@ def run_grounding_sam_demo_canny(config_file, grounded_checkpoint, sam_version, 
     scale_factor = 1
     # If box coordinates exist, then create a crop of the base image using the coordinates
     if box_coordinates:
-        # Scale the base image and adjust coordinates
+        # Crop the original image using the original coordinates
+        crop_x = box_coordinates["left"]
+        crop_y = box_coordinates["upper"]
+        crop_width = box_coordinates["right"] - box_coordinates["left"]
+        crop_height = box_coordinates["lower"] - box_coordinates["upper"]
+
+        cropped_pil = original_image_pil.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
+
+        # Ensure the cropped image is in RGB format
+        cropped_pil = cropped_pil.convert("RGB")
+
+        # Scale up the cropped image and adjust coordinates
         scaled_image, scaled_box_coordinates, scale_factor = scale_image_and_adjust_coordinates(
-            original_image_pil, box_coordinates
+            cropped_pil, box_coordinates
         )
 
+        # Show the cropped image for troubleshooting
+        #cropped_pil.show()
+        # Convert the scaled image to a tensor
+        cropped_img = torch.from_numpy(np.array(scaled_image).transpose(2, 0, 1)).float().div(255.0)
+        cropped_pil = scaled_image
+
+        # Scaled coordinates
         crop_x = scaled_box_coordinates["left"]
         crop_y = scaled_box_coordinates["upper"]
         crop_width = scaled_box_coordinates["right"] - scaled_box_coordinates["left"]
         crop_height = scaled_box_coordinates["lower"] - scaled_box_coordinates["upper"]
-        
-        cropped_pil = scaled_image.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
-
-        cropped_pil = cropped_pil.convert("RGB")
-
-        # Resize the cropped image if necessary because the model needs a specific size
-        #cropped_pil, scale_factor = resize_image(cropped_pil, min_size=600)
-
-        # Convert to tensor if needed
-        cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
 
     if text_prompt == "":
         return "Done"

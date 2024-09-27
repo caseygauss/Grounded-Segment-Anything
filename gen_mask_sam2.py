@@ -25,6 +25,9 @@ from GroundingDINO.groundingdino.util.utils import clean_state_dict, get_phrases
 
 from scipy.ndimage import binary_fill_holes
 
+import matplotlib
+matplotlib.use('Agg')
+
 """
 # Inside gen_mask_sam2, add the paths to the segment-anything-2 directory
 sys.path.append(os.path.abspath('segment-anything-2'))
@@ -238,6 +241,8 @@ def get_grounding_output(model, image, caption, box_threshold, text_threshold, w
     if not caption.endswith("."):
         caption = caption + "."
 
+    print("Image size is ", image.shape)
+
     try:
         model = model.to(device)
         print("Model moved to device:", device)
@@ -251,6 +256,8 @@ def get_grounding_output(model, image, caption, box_threshold, text_threshold, w
     except Exception as e:
         print(f"Error during preparation: {e}")
         return "None"
+
+    print("Image size is ", image.shape)
 
     try:
         with torch.no_grad():
@@ -721,6 +728,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     original_image_pil.save(os.path.join(output_dir, "raw_image.jpg"))
 
     cropped_image = original_image
+    print("Early cropped image shape is", cropped_image.shape)
 
     crop_x = 0
     crop_y = 0
@@ -730,7 +738,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     print("Character_prompt is: ", character_prompt)
     print("Box coordinates are: ", box_coordinates)
     
-    if character_prompt != "" and not box_coordinates and text_prompt != "Main Character.":
+    if character_prompt != "" and not box_coordinates and "Main Character" not in text_prompt:
 
         all_box_coordinates = {}
         
@@ -808,34 +816,50 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     scale_factor = 1
     # If box coordinates exist, then create a crop of the base image using the coordinates
     if box_coordinates:
-        # Scale the base image and adjust coordinates
+        # Crop the original image using the original coordinates
+        crop_x = box_coordinates["left"]
+        crop_y = box_coordinates["upper"]
+        crop_width = box_coordinates["right"] - box_coordinates["left"]
+        crop_height = box_coordinates["lower"] - box_coordinates["upper"]
+
+        cropped_pil = original_image_pil.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
+
+        # Ensure the cropped image is in RGB format
+        cropped_pil = cropped_pil.convert("RGB")
+
+        # Scale up the cropped image and adjust coordinates
         scaled_image, scaled_box_coordinates, scale_factor = scale_image_and_adjust_coordinates(
-            original_image_pil, box_coordinates
+            cropped_pil, box_coordinates
         )
 
+        # Show the cropped image for troubleshooting
+        #cropped_pil.show()
+        # Convert the scaled image to a tensor
+        cropped_img = torch.from_numpy(np.array(scaled_image).transpose(2, 0, 1)).float().div(255.0)
+        cropped_pil = scaled_image
+
+        # Scaled coordinates
         crop_x = scaled_box_coordinates["left"]
         crop_y = scaled_box_coordinates["upper"]
         crop_width = scaled_box_coordinates["right"] - scaled_box_coordinates["left"]
         crop_height = scaled_box_coordinates["lower"] - scaled_box_coordinates["upper"]
 
-        # Crop the scaled image using the adjusted coordinates
-        cropped_pil = scaled_image.crop((crop_x, crop_y, crop_x + crop_width, crop_y + crop_height))
-
-        # Ensure the cropped image is in RGB format
-        cropped_pil = cropped_pil.convert("RGB")
-
-        # Convert to tensor if needed
-        cropped_img = torch.from_numpy(np.array(cropped_pil).transpose(2, 0, 1)).float().div(255.0)
-
-        # Show the cropped image for troubleshooting
-        #cropped_pil.show()
     else:
+        print("No box coordinates found, using the original image")
         cropped_img = cropped_image
         cropped_pil = original_image_pil
+
+        if 'Emotions' in image_path:
+            
+            scale_factor = 0.78125
         #cropped_img = torch.from_numpy(np.array(cropped_img).transpose(2, 0, 1)).float().div(255.0)
 
     if text_prompt == "":
         return "Done"
+    
+    print(f"Original image size: {original_image_pil.size}, Scaled image size: {cropped_img.shape}")
+    print(f"Scale factor: {scale_factor}")
+    #print(f"Scaled box coordinates: {scaled_box_coordinates}")
 
     # run grounding dino model
     try:
@@ -922,6 +946,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         elif 'dog' in label or 'cat' in label or 'kitten' in label:
             pet_boxes.append(info_obj)
         elif 'main character' in label:
+            print("Main character box found")
             main_character_boxes.append(info_obj)
             score = float(label.split('(')[-1].strip(')'))  # Extracting the confidence score from the label
             main_character_scores.append(score)
@@ -1114,12 +1139,16 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
         # Pass the corrected NumPy array to the predictor
         predictor.set_image_batch([cropped_img_np])
 
+        multi_mask_output = False
+        if 'Main Character' in text_prompt:
+            multi_mask_output = False
+
         with torch.autocast(device_type="cuda", dtype=torch.float16):
             masks_batch, scores_batch, _ = predictor.predict_batch(
                 None,
                 None,
                 box_batch=boxes_to_use,
-                multimask_output=False
+                multimask_output=multi_mask_output
             )
         print(f"Image shape: {image.shape}")
         print("Length of masks_batch:", len(masks_batch))
@@ -1140,8 +1169,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
                     mask = mask.squeeze(0)
                 show_mask2(mask, plt.gca(), random_color=True)
                 masks_to_use.append(mask)
-            for box in boxes:
-                show_box2(box, plt.gca())
+            #for box in boxes:
+                #show_box2(box, plt.gca())
             #plt.show()
             plt.close()
 
@@ -1249,7 +1278,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
     # Dilate each mask to add padding
     print(f"Number of selected masks: {len(masks_to_use)}")
-    dilation_amt = 25  # Adjust this as needed
+    dilation_amt = 20  # Adjust this as needed
 
     if is_poster:
         dilation_amt = 10
@@ -1259,13 +1288,13 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     
     padded_masks = []
 
-    if 'Main Character' not in text_prompt:
+
+    if 'Main Character sauce' not in text_prompt:
         print("yoooooo")
         for mask in masks_to_use:
             mask_np = mask  # Convert the mask to a numpy array
             dilated_mask, _ = dilate_mask(mask_np, dilation_amt)
             padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
-
         
     else:
         for mask in masks_to_use:
@@ -1276,6 +1305,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             else:
                 # Do not dilate the mask but add it to padded_masks
                 padded_masks.append(torch.from_numpy(np.array(mask_np)).unsqueeze(0))
+                print("Proper main character mask added")
         save_path = "cover"
 
     area_dict = {}
@@ -1317,10 +1347,6 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
 
         show_mask(mask_np, plt.gca(), random_color=True)
 
-    """
-    for box, label in zip(boxes_filt, pred_phrases):
-        show_box(box.numpy(), plt.gca(), label)
-    """
     print('all selected pairs length: ', len(all_selected_pairs))
     for pair in all_selected_pairs:
         box = pair['box'].numpy()  # Ensure the box is converted to numpy array if it's a tensor
@@ -1364,22 +1390,30 @@ def scale_image_and_adjust_coordinates(image, box_coordinates, min_width=600, ma
 
     # Ensure the scaled image doesn't exceed the max dimension
     if max(W * scale_factor, H * scale_factor) > max_dim:
-        scale_factor = max_dim / max(W, H)
+        scale_factor = max_dim / max(W, H)  # Scale by the maximum dimension
 
     # Scale the entire image
     new_width = int(W * scale_factor)
     new_height = int(H * scale_factor)
+
+    # Prevent scaling down to a very small image size
+    if new_width < min_width:
+        new_width = min_width
+        scale_factor = new_width / W
+        new_height = int(H * scale_factor)
+
     scaled_image = image.resize((new_width, new_height))
 
     # Adjust the box coordinates based on the scale factor
     scaled_box_coordinates = {
-        "left": box_coordinates["left"] * scale_factor,
-        "upper": box_coordinates["upper"] * scale_factor,
-        "right": box_coordinates["right"] * scale_factor,
-        "lower": box_coordinates["lower"] * scale_factor,
+        "left": max(0, box_coordinates["left"] * scale_factor),
+        "upper": max(0, box_coordinates["upper"] * scale_factor),
+        "right": min(new_width, box_coordinates["right"] * scale_factor),
+        "lower": min(new_height, box_coordinates["lower"] * scale_factor),
     }
 
     return scaled_image, scaled_box_coordinates, scale_factor
+
     
 
 if __name__ == "__main__":
