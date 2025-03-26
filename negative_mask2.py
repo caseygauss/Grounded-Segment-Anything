@@ -939,6 +939,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
         elif 'on head' in label or 'on face' in label:
             negative_boxes.append(info_obj)
         elif 'clothes' in label or 'shirt' in label or "body" in label or "human" in label:
+            #print(f"Clothes box: {label}, score: {score}")
             negative_boxes.append(info_obj)
         elif label.split('(')[0] in words_from_prompt:
 
@@ -1032,10 +1033,10 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
         focal_box_label = highest_score_pair['label']
     elif the_hair_box:
         detection_status = "hair_found"
-        print("hair was found")
+        #print("hair was found")
     elif negative_boxes:
         detection_status = "negative_found"
-        print("negative was found")
+        #print("negative was found")
     else:
         detection_status = "None"
         ##If close_boxes is empty, then we're going to skip the rest of the code
@@ -1043,7 +1044,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
     if negative_boxes:
         detection_status = "negative_found"
             
-        print("negative was found")
+        #print("negative was found")
         for pair in negative_boxes:
             #print("Negative box:", box)
             box = pair['box']
@@ -1097,7 +1098,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
     for box in hand_arm_shirt_boxes:
         box_np = box.numpy() if isinstance(box, torch.Tensor) else box  # Ensure the box is in numpy array format
         best_point = find_best_point(box_np, excluded_boxes)
-        print('Positive point', best_point)
+        #print('Positive point', best_point)
         positive_points.append(best_point)
 
     # Draw output image and plot positive points
@@ -1119,7 +1120,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
 
         box_np = ex_box.numpy() if isinstance(ex_box, torch.Tensor) else ex_box
         best_avoid_point = find_best_point(box_np, hand_arm_shirt_boxes)
-        print('Negative point', best_avoid_point)
+        #print('Negative point', best_avoid_point)
         face_points_avoid.append(best_avoid_point)
 
     plt.savefig(
@@ -1217,11 +1218,11 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
         # Convert boxes to numpy arrays for SAM
         batch_boxes = hand_arm_shirt_boxes_tensor.cpu().numpy()
 
-        print("batch boxes length", len(batch_boxes))
+        #print("batch boxes length", len(batch_boxes))
 
         # Set the image for the predictor
         img_batch = [image]# Print image shape for debugging
-        print(f"Image shape: {image.shape}")
+        #print(f"Image shape: {image.shape}")
 
         # Prepare inputs for predict_batch
         point_coords_batch = [point_coords_tensor.cpu().numpy()]
@@ -1244,7 +1245,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
             print("No masks found:", e)
             return "None"
 
-        print("Processing prediction results...")
+        #print("Processing prediction results...")
         masks_to_use = []
 
         batch_count = 0
@@ -1255,7 +1256,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
             batch_count += 1
             set_count = 0
             # Print sizes for debugging
-            print(f"masks_set size: {len(masks_set)}, scores_tensor size: {scores_tensor.size()}")
+            #print(f"masks_set size: {len(masks_set)}, scores_tensor size: {scores_tensor.size()}")
 
             best_mask = None
             best_score = -1
@@ -1275,7 +1276,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
                         mask_np /= 255.0
 
                     # Print mask shape for debugging
-                    print(f"Mask {i} shape: {mask_np.shape}")
+                   # print(f"Mask {i} shape: {mask_np.shape}")
 
                     # If mask has extra dimensions, handle it
                     if mask_np.shape[0] == 3:
@@ -1307,7 +1308,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
                 if highest_score_index < mask.shape[0] and score_set[highest_score_index].item() > best_score:
                     best_score = score_set[highest_score_index].item()
                     best_mask = mask[highest_score_index]
-                    print(f"Best score is {best_score} for set {set_count}")
+                    #print(f"Best score is {best_score} for set {set_count}")
 
                 if best_mask is not None:
                     best_mask = clean_mask(best_mask)  # Clean the best mask
@@ -1324,7 +1325,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
     if 'Main Character' not in text_prompt:
         for mask in masks_to_use:
             mask_np = mask.cpu().numpy()  # Convert the mask to a numpy array
-            print(f"Dilating mask with shape: {mask_np.shape}")  # Debugging print
+            #print(f"Dilating mask with shape: {mask_np.shape}")  # Debugging print
             dilated_mask, _ = dilate_mask(mask_np, dilation_amt)
             padded_masks.append(torch.from_numpy(np.array(dilated_mask)).unsqueeze(0))
     else:
@@ -1351,6 +1352,7 @@ def run_grounding_sam_demo_negative(config_file, grounded_checkpoint, sam_versio
         # Calculate the area of the current element
         area = torch.sum(binary_mask).item()
         label = pair['label']
+        #print(f"Area of {label}: {area}")
         area_dict[label] = area
 
     # Combine and fill gaps in masks

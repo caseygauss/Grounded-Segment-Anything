@@ -709,7 +709,7 @@ def clean_mask(mask, min_size=500):
     mask = remove_small_objects(mask.astype(bool), min_size=min_size)
     return mask.astype(np.float32)  # Ensure the mask is in float32 format
 
-def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human", character_index=None,predictor=None):
+def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human", character_index=None,predictor=None, head_only=False):
     detection_status = "None"
 
     print("box to use num is", box_to_use_num)
@@ -738,7 +738,7 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
     print("Character_prompt is: ", character_prompt)
     print("Box coordinates are: ", box_coordinates)
     
-    if character_prompt != "" and not box_coordinates and "Main Character" not in text_prompt:
+    if character_prompt != "" and text_prompt == "" and "Main Character" not in text_prompt:
 
         all_box_coordinates = {}
         
@@ -777,14 +777,14 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             left, upper, right, lower = scaled_box.cpu().numpy().tolist()
 
             ##expand box by 10px in each direction if possible
-            if left - 2 > 0:
-                left -= 2
-            if upper - 2 > 0:
-                upper -= 2
-            if right + 2 < W:
-                right += 2
-            if lower + 2 < H:
-                lower += 2
+            if left - 6 > 0:
+                left -= 6
+            if upper - 6 > 0:
+                upper -= 6
+            if right + 6 < W:
+                right += 6
+            if lower + 6 < H:
+                lower += 6
 
             # Save coordinates
             all_box_coordinates[f"box_{i + 1}"] = {"left": left, "upper": upper, "right": right, "lower": lower}
@@ -794,6 +794,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             cropped_image = original_image_pil.crop((left, upper, right, lower))
             
             file_name = f"cropped_img_{char_save_path}_option_{i + 1}.jpg"
+            if head_only:
+                file_name = f"cropped_head_img_{char_save_path}_option_{i + 1}.jpg"
             print("Saving the cropped images as: ", file_name)
             cropped_image.save(os.path.join(output_dir, file_name))
 
@@ -802,6 +804,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             # Save a box to the base cropped image
             if i == 0:
                 special_file_name = f"cropped_img_{char_save_path}.jpg"
+                if head_only:
+                    special_file_name = f"cropped_head_img_{char_save_path}.jpg"
                 cropped_image.save(os.path.join(output_dir, special_file_name))
 
             box_found = True
@@ -1454,6 +1458,7 @@ if __name__ == "__main__":
     parser.add_argument("--char_type", type=str, default="human", help="character type")
     parser.add_argument("--character_index", type=int, default=None, help="character index")
     parser.add_argument("--predictor", type=str, default=None, help="predictor")
+    parser.add_argument("--head_only", type=bool, default=False, help="head only or not")
     args = parser.parse_args()
 
     # Call the new function with the parsed arguments
@@ -1478,5 +1483,6 @@ if __name__ == "__main__":
         args.is_poster,
         args.char_type,
         args.character_index,
-        args.predictor
+        args.predictor,
+        args.head_only
     )

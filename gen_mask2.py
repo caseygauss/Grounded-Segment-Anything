@@ -645,7 +645,7 @@ def show_image(img_pil):
     plt.imshow(np.array(img_pil))
     plt.show()
 
-def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human"):
+def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_checkpoint, sam_hq_checkpoint, use_sam_hq, image_path, text_prompt, output_dir, box_threshold, text_threshold, device, character_prompt="", save_path="", just_measuring=False, negative_points=[], box_to_use_num=None, box_coordinates={}, is_poster=False, char_type="human", head_only=False):
     detection_status = "None"
 
     print("box to use num is", box_to_use_num)
@@ -719,6 +719,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             cropped_image = original_image_pil.crop((left, upper, right, lower))
             print("Setting the cropped options...")
             file_name = f"cropped_img_{char_save_path}_option_{i + 1}.jpg"
+            if head_only:
+                file_name = f"cropped_head_img_{char_save_path}_option_{i + 1}.jpg"
             cropped_image.save(os.path.join(output_dir, file_name))
 
             crop_x, crop_y = left, upper
@@ -726,6 +728,8 @@ def run_grounding_sam_demo(config_file, grounded_checkpoint, sam_version, sam_ch
             # Save a box to the base cropped image
             if i == 0:
                 special_file_name = f"cropped_img_{char_save_path}.jpg"
+                if head_only:
+                    special_file_name = f"cropped_head_img_{char_save_path}.jpg"
                 cropped_image.save(os.path.join(output_dir, special_file_name))
 
             box_found = True
@@ -1255,6 +1259,7 @@ if __name__ == "__main__":
     parser.add_argument("--box_to_use_num", type=int, default=None, help="box number of main char to use for masking")
     parser.add_argument("--is_poster", type=bool, default=False, help="is poster or not")
     parser.add_argument("--char_type", type=str, default="human", help="character type")
+    parser.add_argument("--head_only", type=bool, default=False, help="head only or not")
     args = parser.parse_args()
 
     # Call the new function with the parsed arguments
@@ -1277,5 +1282,6 @@ if __name__ == "__main__":
         args.negative_points,
         args.box_to_use_num,
         args.is_poster,
-        args.char_type
+        args.char_type,
+        args.head_only
     )
